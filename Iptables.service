@@ -1,0 +1,21 @@
+cat > /etc/systemd/system/fix-iptables.service << 'EOF'
+[Unit]
+Description=Fix iptables rules for SSH users
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash /root/fix-iptables.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+
+###########
+
+#فایل‌های راه‌اندازی خودکار iptables بعد از ریبوت
+
+#این سرویس، بعد از بوت اجرا میشه و اسکریپت/root/fix-iptables.sh اجرا میکنه 
+
+#وقتی سرور خریدی بزن
