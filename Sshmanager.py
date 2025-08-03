@@ -741,20 +741,24 @@ def run_bot():
         fallbacks=[]
     )
 
-    # هندلرها
+    # هندلرهای عمومی و کنترلی
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(conv_handler)
-    app.add_handler(extend_conv)  # ← کانورسیشن تمدید
     app.add_handler(CommandHandler("menu", menu))
+
+    app.add_handler(conv_handler)
+    app.add_handler(extend_conv)  # کانورسیشن تمدید
+
     app.add_handler(CallbackQueryHandler(delete_user_handler, pattern="^delete_user$"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(ask_user_to_lock, pattern="^lock_user$"))
     app.add_handler(CallbackQueryHandler(ask_user_to_unlock, pattern="^unlock_user$"))
     app.add_handler(CallbackQueryHandler(show_limited_users, pattern="^show_limited$"))
     app.add_handler(CallbackQueryHandler(show_blocked_users, pattern="^show_blocked$"))
     app.add_handler(CallbackQueryHandler(start_extend_user, pattern="^extend_user$"))
     app.add_handler(CallbackQueryHandler(end_extend_handler, pattern="^end_extend$"))
+
+    # حواست باشه که هندلر خاص‌تر باید قبل از عمومی ثبت بشه
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))  # برای قفل‌کردن
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))  # عمومی‌ترین هندلر
 
     app.run_polling()
 
