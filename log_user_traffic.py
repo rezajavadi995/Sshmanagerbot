@@ -14,8 +14,8 @@ from datetime import datetime
 
 # تنظیمات
 LIMITS_DIR = "/etc/sshmanager/limits"
-BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
-ADMIN_ID = "8062924341"
+BOT_TOKEN = "your_token"
+ADMIN_ID = "your_id"
 LOG_FILE = "/var/log/sshmanager-traffic.log"
 
 def send_telegram_message(text):
