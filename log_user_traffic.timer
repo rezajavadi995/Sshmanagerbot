@@ -1,0 +1,41 @@
+#after buy server: 
+
+
+cat > /etc/systemd/system/log-user-traffic.timer << 'EOF'
+[Unit]
+Description=Run Traffic Logger Every 5 Minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+######################################
+systemctl daemon-reexec
+systemctl daemon-reload
+
+# بعد از نصب اینارو بزن
+
+
+sudo systemctl enable log-user-traffic.timer
+sudo systemctl start log-user-traffic.timer
+sudo systemctl status log-user-traffic.timer
+
+#بعدا بپرس فرقشون چیه با بالایی
+
+systemctl enable --now log-user-traffic.timer
+
+
+
+#Barresi Kar kard: 
+
+
+systemctl status log-user-traffic.timer
+
+#ejraye dasti
+
+/usr/local/bin/log_user_traffic.py
+
