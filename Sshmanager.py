@@ -520,13 +520,30 @@ async def delete_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 #کد_قفل_کردن_کاربر_به_صورت_دستی
 
-    
 async def ask_user_to_lock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     if update.effective_user.id != ADMIN_ID:
         return
     context.user_data["awaiting_lock"] = True
     await update.callback_query.message.reply_text("🛑 نام کاربری را برای *قفل کردن* وارد کنید:", parse_mode="Markdown")
+
+#تعریف_تابع_پیام_متنی_برای_قفل_کاربر
+async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get("awaiting_lock") != True:
+        return
+
+    username = update.message.text.strip()
+    context.user_data["awaiting_lock"] = False  # پاک‌سازی وضعیت
+
+    # بررسی اینکه یوزر وجود دارد یا نه
+    check = subprocess.getoutput(f"id -u {username}")
+    if not check.isdigit():
+        await update.message.reply_text("❌ این نام کاربری وجود ندارد.")
+        return
+
+    # قفل کردن کاربر
+    subprocess.run(["sudo", "usermod", "-L", username])
+    await update.message.reply_text(f"🔒 اکانت کاربر `{username}` قفل شد.", parse_mode="Markdown")
     
 
 #کد_آنلاک_کردن_کاربر_به_صورت_دستی
@@ -730,6 +747,7 @@ def run_bot():
     app.add_handler(extend_conv)  # ← کانورسیشن تمدید
     app.add_handler(CommandHandler("menu", menu))
     app.add_handler(CallbackQueryHandler(delete_user_handler, pattern="^delete_user$"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(CallbackQueryHandler(ask_user_to_lock, pattern="^lock_user$"))
     app.add_handler(CallbackQueryHandler(ask_user_to_unlock, pattern="^unlock_user$"))
