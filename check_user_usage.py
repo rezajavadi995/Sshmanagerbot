@@ -1,0 +1,88 @@
+هشدار مصرف (بررسی ساعتی و پیام به ادمین)
+
+📌 ایده کلی:
+
+هر ساعت، اسکریپتی اجرا بشه که:
+
+فایل‌های /etc/sshmanager/limits/*.json رو بخونه
+
+اگر used بیش از ۹۰٪ limit بود → پیام هشدار به ادمین بفرسته (با bot)
+
+مراحل زیر رو دنبال کن
+
+#########################################
+
+ساخت فایل اسکریپت بررسی مصرف
+
+cat > /usr/local/bin/check_user_usage.py << 'EOF'
+#!/usr/bin/env python3
+import os, json
+import requests
+
+LIMITS_DIR = "/etc/sshmanager/limits"
+BOT_TOKEN = "your_token"
+ADMIN_ID = "your id"
+
+def send_alert(username, percent):
+    msg = f"⚠️ هشدار: مصرف اکانت `{username}` به {percent:.0f}% رسیده است."
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    requests.post(url, data={"chat_id": ADMIN_ID, "text": msg, "parse_mode": "Markdown"})
+
+for file in os.listdir(LIMITS_DIR):
+    if file.endswith(".json"):
+        path = os.path.join(LIMITS_DIR, file)
+        with open(path) as f:
+            data = json.load(f)
+            used = int(data.get("used", 0))
+            limit = int(data.get("limit", 1))  # پیش‌فرض برای جلوگیری از تقسیم بر صفر
+            percent = (used / limit) * 100
+            if percent >= 90:
+                username = file.replace(".json", "")
+                send_alert(username, percent)
+EOF
+
+chmod +x /usr/local/bin/check_user_usage.py
+
+###################################
+
+ساخت systemd.timer برای اجرا هر ساعت:
+
+
+cat > /etc/systemd/system/check-usage.timer << 'EOF'
+[Unit]
+Description=Check SSH User Traffic Hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target
+EOF
+
+
+
+##################################### 
+
+سرویس اجرا کننده:
+
+cat > /etc/systemd/system/check-usage.service << 'EOF'
+[Unit]
+Description=Run check_user_usage.py script
+
+[Service]
+ExecStart=/usr/local/bin/check_user_usage.py
+EOF
+
+
+
+################################ 
+
+سپس فعال‌سازی:
+
+systemctl daemon-reexec
+systemctl daemon-reload
+systemctl enable --now check-usage.timer
+
+#####################
+✅ از این به بعد، هر یک ساعت مصرف بررسی می‌شه و اگر زیاد بود، بهت پیام می‌ده.
