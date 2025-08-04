@@ -59,14 +59,19 @@ for line in lines:
 
             # اگر حجم مصرفی بیشتر یا مساوی از حد بود → قطع دسترسی
             if limit > 0 and new_used >= limit:
-                subprocess.call([
-                    "iptables", "-D", "SSH_USERS", "-m", "owner",
-                    "--uid-owner", str(uid), "-j", "ACCEPT"
-                ])
-                send_telegram_message(
-                    f"⛔️ حجم کاربر `{username}` تمام شد و دسترسی او *قطع شد*.\n"
-                    f"📊 مصرف: `{new_used}/{limit}` کیلوبایت"
-                )
+                subprocess.call(["python3", "/root/sshmanager/lock_user.py", username])
+
+            #کامنت شده فعلا از فایل لاک یوزر پاور میگیره
+            #اگه باگ داشت فعالش کن
+                #subprocess.call([
+                    #"iptables", "-D", "SSH_USERS", "-m", "owner",
+                    #"--uid-owner", str(uid), "-j", "ACCEPT"
+                #])
+            
+                #send_telegram_message(
+                    #f"⛔️ حجم کاربر `{username}` تمام شد و دسترسی او *قطع شد*.\n"
+                    #f"📊 مصرف: `{new_used}/{limit}` کیلوبایت"
+                #)
 
             # هشدار نزدیک شدن به حجم
             elif limit > 0:
