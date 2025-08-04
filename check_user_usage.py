@@ -18,13 +18,19 @@ cat > /usr/local/bin/check_user_usage.py << 'EOF'
 #!/usr/bin/env python3
 import os, json
 import requests
+from datetime import datetime
 
 LIMITS_DIR = "/etc/sshmanager/limits"
 BOT_TOKEN = "your_token"
 ADMIN_ID = "your id"
 
 def send_alert(username, percent):
-    msg = f"⚠️ هشدار: مصرف اکانت `{username}` به {percent:.0f}% رسیده است."
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    msg = (
+        f"⚠️ کاربر `{username}` بیش از ۹۰٪ از حجم مجاز خود را مصرف کرده است.\n"
+        f"📊 میزان مصرف: {percent:.0f}%\n"
+        f"🕒 زمان بررسی: {now}"
+    )
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": ADMIN_ID, "text": msg, "parse_mode": "Markdown"})
 
