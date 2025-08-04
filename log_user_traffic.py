@@ -94,7 +94,7 @@ for line in lines:
                 days_left = (expire_ts - now_ts) // 86400
                 if 0 <= days_left <= 2:
                     send_telegram_message(
-                        f"⏳ فقط {days_left} روز تا پایان اعتبار کاربر `{username}` باقی مانده است."
+                        f"⏳ تنها {days_left} روز تا پایان زمان اکانت `{username}` باقی مانده است."
                     )
 
             # ذخیره‌سازی فایل به‌روزشده
