@@ -1,3 +1,5 @@
+#این فایل فعلا کاربردی نداره
+
 cat > /usr/local/bin/check_users.py << 'EOF'
 #!/usr/bin/env python3
 import os, subprocess, json
