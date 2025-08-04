@@ -8,7 +8,8 @@ import psutil
 import socket
 import time
 import json
-import traceback 
+import traceback
+from sshmanager.lock_user import lock_user
 from pathlib import Path
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
