@@ -29,8 +29,11 @@ for user in users:
     try:
         exp = datetime.datetime.strptime(exp_date, "%b %d, %Y")
         if exp < datetime.datetime.now():
-            subprocess.call(["usermod", "--expiredate", "1", user])
-            notify_admin(user, "اتمام تاریخ انقضا")
+            #v1
+            #subprocess.call(["usermod", "--expiredate", "1", user])
+            #notify_admin(user, "اتمام تاریخ انقضا")
+            #v2
+            subprocess.run(["python3", "/root/sshmanager/lock_user.py", user])
     except Exception:
         continue
         
