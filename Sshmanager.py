@@ -544,8 +544,17 @@ async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # قفل کردن کاربر
-    subprocess.run(["sudo", "usermod", "-L", username])
-    await update.message.reply_text(f"🔒 اکانت کاربر `{username}` قفل شد.", parse_mode="Markdown")
+    success = lock_user_account(username)
+    if success:
+        await update.message.reply_text(
+            f"🔒 اکانت کاربر `{username}` با موفقیت قفل شد.",
+            parse_mode="Markdown"
+        )
+    else:
+        await update.message.reply_text(
+            "❌ خطا در قفل‌کردن اکانت.",
+            parse_mode="Markdown"
+        )
     
 
 #کد_آنلاک_کردن_کاربر_به_صورت_دستی
@@ -622,13 +631,13 @@ async def show_blocked_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 #بررسی_و_تکمیل_مرحله_قفل_و_باز_کردن_اکانت_به_صورت_دستی
 
-def lock_user_account(username):
-    try:
-        subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=True)
-        subprocess.run(["sudo", "passwd", "-l", username], check=True)
-        return True
-    except:
-        return False
+#def lock_user_account(username):
+    #try:
+        #subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=True)
+        #subprocess.run(["sudo", "passwd", "-l", username], check=True)
+        #return True
+    #except:
+        #return False
 
 #هندل_تکس
 
