@@ -5,36 +5,42 @@ cat > /usr/local/bin/check_users_expire.py << 'EOF'
 import subprocess
 import datetime
 import requests
+from datetime import datetime
 
 BOT_TOKEN = "your_token"
 ADMIN_ID = "your_id"
 
-def notify_admin(username, reason):
-    requests.post(
-        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        data={
-            "chat_id": ADMIN_ID,
-            "text": f"⚠️ اکانت `{username}` به دلیل {reason} غیرفعال شد.",
-            "parse_mode": "Markdown"
-        }
+def notify_admin(username, expire_date):
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    message = (
+        f"⚠️ اکانت `{username}` به دلیل *اتمام تاریخ انقضا* غیرفعال شد.\n"
+        f"📅 تاریخ انقضا: `{expire_date}`\n"
+        f"⏰ زمان بررسی: `{now}`"
     )
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            data={"chat_id": ADMIN_ID, "text": message, "parse_mode": "Markdown"}
+        )
+    except Exception:
+        pass
 
 users = subprocess.getoutput("awk -F: '$3 >= 1000 {print $1}' /etc/passwd").splitlines()
 
 for user in users:
-    exp_date = subprocess.getoutput(f"chage -l {user} | grep 'Account expires' | cut -d: -f2").strip()
+    exp_date = subprocess.getoutput(
+        f"chage -l {user} | grep 'Account expires' | cut -d: -f2"
+    ).strip()
+
     if exp_date.lower() == "never" or not exp_date:
         continue
 
     try:
-        exp = datetime.datetime.strptime(exp_date, "%b %d, %Y")
-        if exp < datetime.datetime.now():
-            #v1
-            #subprocess.call(["usermod", "--expiredate", "1", user])
-            
-            #v2
+        exp = datetime.strptime(exp_date, "%b %d, %Y")
+        if exp < datetime.now():
+            # استفاده از lock_user.py برای قفل حرفه‌ای
             subprocess.run(["python3", "/root/sshmanager/lock_user.py", user])
-            notify_admin(user, "اتمام تاریخ انقضا")
+            notify_admin(user, exp.strftime("%Y-%m-%d"))
     except Exception:
         continue
         
