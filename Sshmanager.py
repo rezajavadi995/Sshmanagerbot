@@ -42,11 +42,13 @@ def random_str(length=10):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
 
-def lock_user_account(username):
+def lock_user_account(username: str) -> bool:
     try:
-        subprocess.run(["sudo", "usermod", "-L", username], check=True)
+        subprocess.run(["sudo", "passwd", "-l", username], check=True)
+        subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=True)
         return True
-    except subprocess.CalledProcessError:
+    except Exception as e:
+        print(f"[!] خطا در lock_user_account: {e}")
         return False
 
 def remove_user_iptables_rule(username):
