@@ -20,6 +20,8 @@ def lock_user(username):
         # غیرفعال کردن شل و قفل کردن اکانت
         subprocess.run(["usermod", "-s", "/usr/sbin/nologin", username], check=True)
         subprocess.run(["passwd", "-l", username], check=True)
+        #تغییر زمان اکانت به گذشته
+        subprocess.run(["usermod", "--expiredate", "1", username], check=True)
 
         # حذف rule از iptables
         uid = subprocess.getoutput(f"id -u {username}").strip()
