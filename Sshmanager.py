@@ -710,15 +710,67 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     #باز کردن قفل اکانت
     if context.user_data.get("awaiting_unlock"):
-        text = update.message.text.strip()
-        try:
-            subprocess.run(["sudo", "usermod", "-s", "/bin/bash", text], check=True)
-            subprocess.run(["sudo", "passwd", "-u", text], check=True)
-            await update.message.reply_text(f"✅ اکانت `{text}` با موفقیت فعال شد.", parse_mode="Markdown")
-        except Exception as e:
-            await update.message.reply_text(f"❌ خطا در فعال‌سازی اکانت:\n`{e}`", parse_mode="Markdown")
-        context.user_data["awaiting_unlock"] = False
-        return
+    username = update.message.text.strip()
+    context.user_data["awaiting_unlock"] = False
+
+    try:
+        # بررسی اینکه کاربر محدود شده نباشه
+        limits_file = f"/etc/sshmanager/limits/{username}.json"
+        is_restricted = False
+
+        if os.path.exists(limits_file):
+            with open(limits_file) as f:
+                data = json.load(f)
+
+            # بررسی مصرف حجمی
+            limit = int(data.get("limit", 0))
+            used = int(data.get("used", 0))
+            if limit > 0 and used >= limit:
+                is_restricted = True
+
+            # بررسی انقضا
+            if "expire_timestamp" in data:
+                now = int(datetime.datetime.now().timestamp())
+                expire_ts = int(data["expire_timestamp"])
+                if now >= expire_ts:
+                    is_restricted = True
+
+        if is_restricted:
+            await update.message.reply_text(
+                f"⚠️ اکانت `{username}` به‌دلیل *اتمام زمان یا حجم* محدود شده است.\n"
+                f"برای رفع این محدودیت، از دکمه *تمدید اشتراک* استفاده کن.",
+                parse_mode="Markdown"
+            )
+            return
+
+        # اگر محدود نبود، ادامه می‌دیم به رفع مسدودسازی دستی
+
+        subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=True)
+        subprocess.run(["sudo", "passwd", "-u", username], check=True)
+
+        # بررسی rule در iptables
+        uid = subprocess.getoutput(f"id -u {username}").strip()
+        check_rule = subprocess.run(
+            ["iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+        if check_rule.returncode != 0:
+            subprocess.run(
+                ["iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                check=True
+            )
+
+        await update.message.reply_text(
+            f"✅ اکانت `{username}` با موفقیت *باز شد*.",
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ خطا در فعال‌سازی اکانت:\n`{e}`",
+            parse_mode="Markdown"
+        )
 
     # سایر عملیات متنی
     if text == "📊 وضعیت سیستم":
