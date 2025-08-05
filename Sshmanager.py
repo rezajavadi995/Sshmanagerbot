@@ -1,7 +1,7 @@
 cat > /root/sshmanager.py << 'EOF'
 import os
 import subprocess
-import datetime
+#import datetime
 import random
 import string
 import psutil
@@ -9,6 +9,7 @@ import socket
 import time
 import json
 import traceback
+from datetime import datetime
 from sshmanager.lock_user import lock_user
 from pathlib import Path
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -609,7 +610,7 @@ async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.callback_query.message.reply_text("❌ پوشه محدودیت پیدا نشد.")
         return
 
-    msg = "📊 لیست کاربران حجمی:\n"
+    msg = " لیست کاربران حجمی:\n\n"
     found = False
 
     for file in limits_dir.glob("*.json"):
@@ -622,18 +623,39 @@ async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 continue
 
             used = int(data.get("used", 0))
-            limit = int(data.get("limit", 0))
-            percent = (used / limit) * 100 if limit > 0 else 0
+            limit = int(data.get("limit", 1))  # جلوگیری از تقسیم بر صفر
+            percent = int((used / limit) * 100)
 
-            msg += f"👤 {username} → {used}/{limit} MB ({int(percent)}%)\n"
+            # زمان انقضا (اختیاری)
+            expire_text = ""
+            if "expire_timestamp" in data:
+                expire_ts = int(data["expire_timestamp"])
+                now_ts = int(datetime.now().timestamp())
+                days_left = (expire_ts - now_ts) // 86400
+                if days_left >= 0:
+                    expire_text = f" | ⏳ {days_left} روز مانده"
+                else:
+                    expire_text = " | ⌛ منقضی‌شده"
+
+            # نمایش با رنگ یا ایموجی ویژه
+            emoji = "🟢"
+            if percent >= 90:
+                emoji = "🔴"
+            elif percent >= 80:
+                emoji = "🟠"
+            elif percent >= 60:
+                emoji = "🟡"
+
+            msg += f"{emoji} `{username}` → {used}/{limit} KB ({percent}٪){expire_text}\n"
             found = True
+
         except Exception as e:
             print(f"[!] خطا در خواندن {file}: {e}")
 
     if not found:
         msg = "⚠️ هیچ کاربر حجمی پیدا نشد."
 
-    await update.callback_query.message.reply_text(msg)
+    await update.callback_query.message.reply_text(msg, parse_mode="Markdown")
 
 #کد_مشاهده_نمایش_مسدودی_ها
 
