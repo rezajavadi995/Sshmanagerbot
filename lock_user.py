@@ -1,11 +1,16 @@
+#اول دستور زیرو بزن تا پوشه ساخته بشه
+
+rm -rf /root/sshmanager/lock_user.py
+
+
 cat > /root/sshmanager/lock_user.py << 'EOF'
 #!/usr/bin/env python3
 import subprocess
 import sys
 import requests
 
-BOT_TOKEN = "your_token"
-ADMIN_ID = your_id
+BOT_TOKEN = "your token"
+ADMIN_ID = your id
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
