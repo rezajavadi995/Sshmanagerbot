@@ -352,12 +352,13 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.reply_text("❌ خطا: اطلاعات تمدید ناقص است.")
         return ConversationHandler.END
 
+    uid = subprocess.getoutput(f"id -u {username}").strip()
+
     # تمدید زمان
     if action == "renew_time" and data.startswith("add_days_"):
         days = int(data.replace("add_days_", ""))
-        added_days = days  # برای گزارش نهایی
+        added_days = days
 
-        # دریافت تاریخ فعلی انقضا
         output = subprocess.getoutput(f"chage -l {username}")
         current_exp = ""
         for line in output.splitlines():
@@ -365,26 +366,27 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 current_exp = line.split(":")[1].strip()
                 break
 
-        # محاسبه تاریخ جدید
         if current_exp.lower() != "never":
             current_date = datetime.datetime.strptime(current_exp, "%b %d, %Y")
             new_date = current_date + datetime.timedelta(days=days)
         else:
             new_date = datetime.datetime.now() + datetime.timedelta(days=days)
 
-        # تغییر تاریخ انقضا
         subprocess.run(["chage", "-E", new_date.strftime("%Y-%m-%d"), username])
 
-        # بازکردن قفل کاربر (در صورت مسدود بودن)
+        # باز کردن قفل و اضافه‌کردن rule iptables
         subprocess.run(["usermod", "-s", "/bin/bash", username])
         subprocess.run(["passwd", "-u", username])
 
-        # اضافه کردن دوباره به iptables
-        uid = subprocess.getoutput(f"id -u {username}").strip()
-        subprocess.run([
-            "iptables", "-A", "SSH_USERS", "-m", "owner",
-            "--uid-owner", uid, "-j", "ACCEPT"
-        ])
+        # بررسی وجود rule قبلی
+        rule_check = subprocess.run(
+            ["iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+            stderr=subprocess.DEVNULL
+        )
+        if rule_check.returncode != 0:
+            subprocess.run([
+                "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"
+            ])
 
         await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
 
@@ -393,7 +395,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
     # تمدید حجم
     elif action == "renew_volume" and data.startswith("add_gb_"):
         gb = int(data.replace("add_gb_", ""))
-        added_gb = gb  # برای گزارش نهایی
+        added_gb = gb
         limits_file = f"/etc/sshmanager/limits/{username}.json"
 
         if os.path.exists(limits_file):
@@ -403,16 +405,17 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             with open(limits_file, "w") as f:
                 json.dump(d, f)
 
-            # باز کردن قفل (اگر محدود شده باشه)
             subprocess.run(["usermod", "-s", "/bin/bash", username])
             subprocess.run(["passwd", "-u", username])
 
-            # افزودن به iptables
-            uid = subprocess.getoutput(f"id -u {username}").strip()
-            subprocess.run([
-                "iptables", "-A", "SSH_USERS", "-m", "owner",
-                "--uid-owner", uid, "-j", "ACCEPT"
-            ])
+            rule_check = subprocess.run(
+                ["iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                stderr=subprocess.DEVNULL
+            )
+            if rule_check.returncode != 0:
+                subprocess.run([
+                    "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"
+                ])
 
             await query.message.reply_text(
                 f"📶 حجم اکانت `{username}` به مقدار {gb}GB افزایش یافت.",
