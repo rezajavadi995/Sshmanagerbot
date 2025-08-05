@@ -9,7 +9,7 @@ import socket
 import time
 import json
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from sshmanager.lock_user import lock_user
 from pathlib import Path
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -18,8 +18,8 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
 
-BOT_TOKEN = "your_token"
-ADMIN_ID = #your admin id
+BOT_TOKEN = "توکن بات"
+ADMIN_ID = ایدی عددی
 PORT_PUBLIC = 443
 DOMAIN = "ssh.ultraspeed.shop"
 NOLOGIN_PATH = "/usr/sbin/nologin"
@@ -483,7 +483,9 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         period_str = "۲ ساعته تستی"
     else:
         days = int(period.replace("d", ""))
-        delta = datetime.timedelta(days=days)
+        #اگر دیدی باگ نداشت بعدا پاکش کن
+        #delta = datetime.timedelta(days=days)
+        delta = timedelta(days=days)
         expire_date = datetime.datetime.now() + delta
         period_str = f"{days} روزه"
 
