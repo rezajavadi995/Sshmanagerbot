@@ -732,8 +732,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     #باز کردن قفل اکانت
     if context.user_data.get("awaiting_unlock"):
-    username = update.message.text.strip()
-    context.user_data["awaiting_unlock"] = False
+        username = update.message.text.strip()
+        context.user_data["awaiting_unlock"] = False
 
     try:
         # بررسی اینکه کاربر محدود شده نباشه
