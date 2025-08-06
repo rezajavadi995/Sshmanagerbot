@@ -260,23 +260,62 @@ async def handle_extend_username(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
 
     username = update.message.text.strip()
-    context.user_data["renew_username"] = username
+    context.user_data["renew_username"] = username  # ذخیره برای مراحل بعد
+    context.user_data["renew_action"] = None  # پاک‌سازی مرحله قبلی (اگر بوده)
 
-    # بررسی وجود کاربر (اختیاری ولی پیشنهادی)
+    # بررسی وجود کاربر
     check = subprocess.getoutput(f"id -u {username}")
     if not check.isdigit():
         await update.message.reply_text("❌ این یوزرنیم وجود ندارد.")
         return ConversationHandler.END
 
-    keyboard = [
-        [InlineKeyboardButton("🕒 تمدید زمان", callback_data="renew_time")],
-        [InlineKeyboardButton("📶 تمدید حجم", callback_data="renew_volume")]
-    ]
+    # بررسی وضعیت قفل بودن
+    locked = subprocess.getoutput(f"passwd -S {username}").split()[1] == "L"
+    lock_status = "🚫 وضعیت: مسدود است" if locked else "✅ وضعیت: مسدود نیست"
+
+    # بررسی محدود یا نامحدود بودن (با فایل JSON)
+    limits_file = f"/etc/sshmanager/limits/{username}.json"
+    if os.path.exists(limits_file):
+        with open(limits_file) as f:
+            data = json.load(f)
+        used = int(data.get("used", 0))
+        limit = int(data.get("limit", 1))  # جلوگیری از صفر
+        percent = int((used / limit) * 100)
+        type_str = data.get("type", "unlimited")
+        type_status = "✅ وضعیت: محدود (حجمی)" if type_str == "limited" else "✅ وضعیت: نامحدود"
+        usage_info = f"{used} / {limit} KB ({percent}٪)"
+        expire_ts = int(data.get("expire_timestamp", 0))
+        if expire_ts:
+            expire_date = datetime.fromtimestamp(expire_ts).strftime("%Y-%m-%d")
+        else:
+            expire_date = "نامشخص"
+    else:
+        usage_info = "نامشخص"
+        expire_date = "نامشخص"
+        type_status = "⛔️ فاقد محدودیت حجمی"
+
+    # پیام نهایی
     await update.message.reply_text(
-        f"اکانت `{username}` انتخاب شد. لطفاً نوع تمدید را انتخاب کنید:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        f"👤 اطلاعات اکانت: `{username}`\n"
+        f"📊 مصرف: {usage_info}\n"
+        f"⏳ تاریخ انقضا: {expire_date}\n"
+        f"{lock_status}\n"
+        f"{type_status}",
         parse_mode="Markdown"
     )
+
+    # ارسال دکمه‌ها برای انتخاب تمدید
+    keyboard = [
+        [
+            InlineKeyboardButton("🕒 تمدید زمان", callback_data="renew_time"),
+            InlineKeyboardButton("📶 تمدید حجم", callback_data="renew_volume")
+        ]
+    ]
+    await update.message.reply_text(
+        "لطفاً نوع تمدید را انتخاب کنید:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
     return ASK_RENEW_ACTION
     
     
