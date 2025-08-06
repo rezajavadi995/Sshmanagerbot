@@ -380,7 +380,6 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
 #هندل نهایی برای تمدید و تغییر در حجم و زمان اکانت
 
 async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
-async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     username = context.user_data.get("renew_username", "")
