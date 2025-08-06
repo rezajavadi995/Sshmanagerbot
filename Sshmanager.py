@@ -471,6 +471,13 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     username = context.user_data["username"]
+
+    # جلوگیری از ساخت اکانت با نام کاربری سیستمی
+    uid_check = subprocess.getoutput(f"id -u {username}")
+    if uid_check.isdigit() and int(uid_check) < 1000:
+        await query.message.reply_text("⛔️ این نام کاربری سیستمی است و نمی‌توان برای آن اکانت ساخت.")
+        return ConversationHandler.END
+
     password = random_str()
     acc_type = context.user_data.get("acc_type", "unlimited")
     volume = context.user_data.get("volume", 0)
@@ -478,15 +485,13 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # محاسبه تاریخ انقضا
     if period.endswith("h"):
-        delta = datetime.timedelta(hours=int(period.replace("h", "")))
-        expire_date = datetime.datetime.now() + delta
+        delta = timedelta(hours=int(period.replace("h", "")))
+        expire_date = datetime.now() + delta
         period_str = "۲ ساعته تستی"
     else:
         days = int(period.replace("d", ""))
-        #اگر دیدی باگ نداشت بعدا پاکش کن
-        #delta = datetime.timedelta(days=days)
         delta = timedelta(days=days)
-        expire_date = datetime.datetime.now() + delta
+        expire_date = datetime.now() + delta
         period_str = f"{days} روزه"
 
     expire_str = expire_date.strftime("%Y-%m-%d %H:%M")
@@ -507,12 +512,18 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # تنظیم تاریخ انقضا
         subprocess.run(["sudo", "chage", "-E", expire_date.strftime("%Y-%m-%d"), username], check=True)
 
-        # افزودن به iptables
+        # افزودن به iptables (با بررسی وجود و ارور)
         uid = subprocess.getoutput(f"id -u {username}").strip()
-        subprocess.run(["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                       stderr=subprocess.DEVNULL)
-        subprocess.run(["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                       check=True)
+        subprocess.run([
+            "sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        result = subprocess.run([
+            "sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"
+        ], stderr=subprocess.PIPE)
+
+        if result.returncode != 0:
+            await query.message.reply_text("⚠️ اخطار: rule مربوط به iptables اضافه نشد. لطفاً بررسی کنید.")
 
         # ساخت فایل محدودیت اگر اکانت حجمی بود
         if acc_type == "limited":
@@ -521,7 +532,7 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
             limit_file = limits_dir / f"{username}.json"
             data = {
                 "limit": volume,     # MB
-                "used": 0,           # در آینده با cron بروزرسانی میشه
+                "used": 0,
                 "type": "limited",
                 "expire": expire_str
             }
@@ -535,6 +546,7 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(
             f"✅ اکانت با موفقیت ساخته شد ({period_str}):\n\n{format_config(username, password, expire_str)}"
         )
+
     except subprocess.CalledProcessError as e:
         await query.message.reply_text(f"❌ خطا در ساخت اکانت یا تنظیم فایروال:\n\n{e}")
     except Exception as e:
