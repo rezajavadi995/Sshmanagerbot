@@ -448,6 +448,8 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.",
             parse_mode="Markdown"
         )
+        context.user_data["added_days"] = added_days
+        
 
     # ------------------------------------
 
@@ -480,6 +482,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 f"📶 حجم اکانت `{username}` به مقدار {gb}GB افزایش یافت.",
                 parse_mode="Markdown"
             )
+            context.user_data["added_gb"] = added_gb
         else:
             await query.message.reply_text("❌ فایل محدودیت پیدا نشد.")
 
@@ -522,7 +525,20 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def end_extend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     username = context.user_data.get("renew_username", "نامشخص")
-    await update.callback_query.message.reply_text(f"✅ عملیات تمدید برای `{username}` به پایان رسید.", parse_mode="Markdown")
+    added_days = context.user_data.get("added_days", 0)
+    added_gb = context.user_data.get("added_gb", 0)
+
+    # خلاصه نهایی
+    summary = f"✅ عملیات تمدید برای `{username}` به پایان رسید.\n\n"
+    if added_days:
+        summary += f"🕒 تمدید زمان: +{added_days} روز\n"
+    if added_gb:
+        summary += f"📶 تمدید حجم: +{added_gb} GB\n"
+
+    if not added_days and not added_gb:
+        summary += "ℹ️ هیچ تغییری اعمال نشد."
+
+    await update.callback_query.message.reply_text(summary, parse_mode="Markdown")
     return ConversationHandler.END
     
     
