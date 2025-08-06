@@ -407,10 +407,10 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 break
 
         if current_exp.lower() != "never":
-            current_date = datetime.datetime.strptime(current_exp, "%b %d, %Y")
-            new_date = current_date + datetime.timedelta(days=days)
+            current_date = datetime.strptime(current_exp, "%b %d, %Y")
+            new_date = current_date + timedelta(days=days)
         else:
-            new_date = datetime.datetime.now() + datetime.timedelta(days=days)
+            new_date = datetime.now() + timedelta(days=days)
 
         subprocess.run(["chage", "-E", new_date.strftime("%Y-%m-%d"), username])
 
@@ -418,7 +418,6 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         subprocess.run(["usermod", "-s", "/bin/bash", username])
         subprocess.run(["passwd", "-u", username])
 
-        # بررسی وجود rule قبلی
         rule_check = subprocess.run(
             ["iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
             stderr=subprocess.DEVNULL
@@ -428,7 +427,22 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"
             ])
 
-        await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
+        # به‌روزرسانی expire_timestamp در فایل محدودیت
+        limits_file = f"/etc/sshmanager/limits/{username}.json"
+        if os.path.exists(limits_file):
+            try:
+                with open(limits_file, "r") as f:
+                    data_json = json.load(f)
+                data_json["expire_timestamp"] = int(new_date.timestamp())
+                with open(limits_file, "w") as f:
+                    json.dump(data_json, f)
+            except:
+                pass
+
+        await query.message.reply_text(
+            f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.",
+            parse_mode="Markdown"
+        )
 
     # ------------------------------------
 
@@ -470,14 +484,22 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             InlineKeyboardButton("➕ تمدید حجم", callback_data="renew_volume"),
             InlineKeyboardButton("❌ خیر، پایان", callback_data="end_extend")
         ]]
-        await query.message.reply_text("آیا می‌خواهید *حجم* این کاربر را هم افزایش دهید؟", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.reply_text(
+            "آیا می‌خواهید *حجم* این کاربر را هم افزایش دهید؟",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
     elif added_gb > 0 and added_days == 0:
         keyboard = [[
             InlineKeyboardButton("➕ تمدید زمان", callback_data="renew_time"),
             InlineKeyboardButton("❌ خیر، پایان", callback_data="end_extend")
         ]]
-        await query.message.reply_text("آیا می‌خواهید *زمان* این کاربر را هم افزایش دهید؟", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.reply_text(
+            "آیا می‌خواهید *زمان* این کاربر را هم افزایش دهید؟",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
     elif added_days > 0 and added_gb > 0:
         await query.message.reply_text(
