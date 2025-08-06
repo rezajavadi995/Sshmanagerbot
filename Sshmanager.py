@@ -566,26 +566,21 @@ async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     username = update.message.text.strip()
-    context.user_data["awaiting_lock"] = False  # پاک‌سازی وضعیت
+    context.user_data["awaiting_lock"] = False
 
-    # بررسی اینکه یوزر وجود دارد یا نه
-    check = subprocess.getoutput(f"id -u {username}")
-    if not check.isdigit():
-        await update.message.reply_text("❌ این نام کاربری وجود ندارد.")
-        return
+    # بررسی اینکه یوزر سیستمی نباشد
+    if subprocess.getoutput(f"id -u {username}").isdigit():
+        uid = int(subprocess.getoutput(f"id -u {username}"))
+        if uid < 1000:
+            await update.message.reply_text("⛔️ این کاربر سیستمی است و نمی‌توان آن را قفل کرد.")
+            return
 
     # قفل کردن کاربر
     success = lock_user_account(username)
     if success:
-        await update.message.reply_text(
-            f"🔒 اکانت کاربر `{username}` با موفقیت قفل شد.",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"🔒 اکانت `{username}` قفل شد.", parse_mode="Markdown")
     else:
-        await update.message.reply_text(
-            "❌ خطا در قفل‌کردن اکانت.",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text("❌ خطا در قفل‌کردن اکانت.")
     
 
 #کد_آنلاک_کردن_کاربر_به_صورت_دستی
