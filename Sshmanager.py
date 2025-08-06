@@ -534,7 +534,8 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "limit": volume,     # MB
                 "used": 0,
                 "type": "limited",
-                "expire": expire_str
+                "expire": expire_str,
+                "expire_timestamp": int(expire_date.timestamp())  # 🔥 این خط فقط اضافه شده
             }
             with limit_file.open("w") as f:
                 json.dump(data, f)
