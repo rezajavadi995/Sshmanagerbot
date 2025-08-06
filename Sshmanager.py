@@ -17,6 +17,8 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
+# بررسی و ساخت پوشه /etc/sshmanager/limits
+Path("/etc/sshmanager/limits").mkdir(parents=True, exist_ok=True)
 
 BOT_TOKEN = "توکن بات"
 ADMIN_ID = ایدی عددی
@@ -149,6 +151,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("❌ دسترسی غیرمجاز")
 
     fix_iptables()  # اجرای اسکریپت اصلاح iptables در شروع
+    
+    # بررسی و ساخت پوشه /etc/sshmanager/limits
+    Path("/etc/sshmanager/limits").mkdir(parents=True, exist_ok=True)
 
     keyboard = [
         [InlineKeyboardButton("✅️ ساخت اکانت SSH", callback_data="create_user")],
