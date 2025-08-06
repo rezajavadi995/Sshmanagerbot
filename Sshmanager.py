@@ -701,15 +701,25 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
     # حذف اکانت
-    if context.user_data.get("awaiting_delete"):
-        username = text
-        try:
-            subprocess.run(["sudo", "userdel", "-f", username], check=True)
-            await update.message.reply_text(f"✅ اکانت `{username}` حذف شد.", parse_mode="Markdown")
-        except Exception as e:
-            await update.message.reply_text(f"❌ حذف با خطا مواجه شد:\n`{e}`", parse_mode="Markdown")
-        context.user_data["awaiting_delete"] = False
-        return
+if context.user_data.get("awaiting_delete"):
+    username = text
+
+    # ✅ جلوگیری از حذف کاربران سیستمی
+    if subprocess.getoutput(f"id -u {username}").isdigit():
+        uid = int(subprocess.getoutput(f"id -u {username}"))
+        if uid < 1000:
+            await update.message.reply_text("⛔️ این کاربر سیستمی است و حذف نمی‌شود.")
+            context.user_data["awaiting_delete"] = False
+            return
+
+    try:
+        subprocess.run(["sudo", "userdel", "-f", username], check=True)
+        await update.message.reply_text(f"✅ اکانت `{username}` حذف شد.", parse_mode="Markdown")
+    except Exception as e:
+        await update.message.reply_text(f"❌ حذف با خطا مواجه شد:\n`{e}`", parse_mode="Markdown")
+
+    context.user_data["awaiting_delete"] = False
+    return
 
 # قفل‌کردن اکانت
     #if context.user_data.get("awaiting_lock"):
