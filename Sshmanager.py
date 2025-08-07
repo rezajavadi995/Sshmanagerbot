@@ -10,10 +10,11 @@ import time
 import json
 import traceback
 import pwd
+import humanize  # برای تبدیل حجم و تاریخ به شکل خوانا
 from datetime import datetime, timedelta
 from sshmanager.lock_user import lock_user
 from pathlib import Path
-
+from telegram.constants import ParseMode
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
@@ -179,6 +180,62 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await update.message.reply_text("📲 پنل مدیریت SSH:", reply_markup=InlineKeyboardMarkup(keyboard))
+#تابع اصلی گزارش گیری با دکمه
+
+async def report_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return await update.message.reply_text("⛔ دسترسی ندارید.")
+
+    users = get_all_system_users()
+    report = "📊 گزارش وضعیت کاربران:\n\n"
+
+    for user in users:
+        user_line = f"👤 `{user}`\n"
+
+        limit_file = f"/etc/sshmanager/limits/{user}.json"
+        if os.path.exists(limit_file):
+            try:
+                with open(limit_file) as f:
+                    data = json.load(f)
+
+                # مصرف شده و باقی‌مانده
+                used = get_user_traffic(user)  # تابعی که باید باشه یا بنویسیم
+                limit = data.get("limit", 0)
+
+                if limit == 0:
+                    usage_str = "✅ نامحدود"
+                else:
+                    remain = max(limit - used, 0)
+                    usage_str = f"{used // 1024}GB مصرف‌شده / {remain // 1024}GB باقی‌مانده"
+
+                # تاریخ انقضا
+                exp_ts = data.get("expire_timestamp")
+                if exp_ts:
+                    days_left = (datetime.fromtimestamp(exp_ts) - datetime.now()).days
+                    exp_str = f"⏳ {days_left} روز مانده"
+                else:
+                    exp_str = "⏳ تاریخ انقضا نامشخص"
+
+            except Exception as e:
+                usage_str = "⚠️ خطا در خواندن فایل محدودیت"
+                exp_str = ""
+        else:
+            usage_str = "✅ نامحدود"
+            exp_str = "⏳ تاریخ انقضا نامشخص"
+        start_ts = data.get("start_timestamp")
+        if start_ts:
+            days_since = (datetime.now() - datetime.fromtimestamp(start_ts)).days
+            start_str = f"📅 {days_since} روز از شروع"
+        else:
+            start_str = ""
+
+        # بررسی قفل بودن
+        locked = "🔒 مسدود" if " L " in lock_status or lock_status.startswith("L") else "✅ فعال"
+
+        user_line += f"{usage_str}\n{exp_str}\n{start_str}\n{locked}\n\n"
+        report += user_line
+
+    await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
 
 async def ask_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
