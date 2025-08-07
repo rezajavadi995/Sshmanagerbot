@@ -9,9 +9,11 @@ import socket
 import time
 import json
 import traceback
+import pwd
 from datetime import datetime, timedelta
 from sshmanager.lock_user import lock_user
 from pathlib import Path
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
@@ -44,6 +46,15 @@ main_menu_keyboard = ReplyKeyboardMarkup(
 
 def random_str(length=10):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+#تابع گرفتن گزارش اکانت
+    
+def get_all_system_users():
+    users = []
+    for p in pwd.getpwall():
+        # فقط کاربرهای واقعی سیستمی با home directory
+        if p.pw_uid >= 1000 and "/home" in p.pw_dir:
+            users.append(p.pw_name)
+    return users
 
 
 def lock_user_account(username: str) -> bool:
