@@ -1085,7 +1085,7 @@ def run_bot():
     app.add_handler(CallbackQueryHandler(show_blocked_users, pattern="^show_blocked$"))
     app.add_handler(CallbackQueryHandler(start_extend_user, pattern="^extend_user$"))
     app.add_handler(CallbackQueryHandler(end_extend_handler, pattern="^end_extend$"))
-    application.add_handler(CallbackQueryHandler(report_all_users_callback, pattern="^report_users$"))
+    app.add_handler(CallbackQueryHandler(report_all_users_callback, pattern="^report_users$"))
 
     # حواست باشه که هندلر خاص‌تر باید قبل از عمومی ثبت بشه
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))  # برای قفل‌کردن
