@@ -1,4 +1,4 @@
-cat > /root/sshmanager.py << 'EOF'
+cat > /root/sshmanagerbot.py << 'EOF'
 import os
 import subprocess
 #import datetime
