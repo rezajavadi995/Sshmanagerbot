@@ -35,6 +35,17 @@ ASK_USERNAME, ASK_TYPE, ASK_VOLUME, ASK_EXPIRE = range(4)
 # Stateهای مکالمه تمدید
 ASK_RENEW_USERNAME, ASK_RENEW_ACTION, ASK_RENEW_TYPE, ASK_RENEW_VALUE = range(4, 8)
 
+
+# برگشت دادن تابع reply مناسب بر اساس نوع update
+def get_reply_func(update):
+    if hasattr(update, "message") and update.message:
+        return update.message.reply_text
+    elif hasattr(update, "callback_query") and update.callback_query:
+        return update.callback_query.message.reply_text
+    else:
+        # fallback: هیچ‌کاری نکنه
+        return lambda *args, **kwargs: None
+
 main_menu_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         ["📊 وضعیت سیستم", "🛡 بررسی سلامت سرور"],
