@@ -176,8 +176,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [InlineKeyboardButton("📊 کاربران حجمی", callback_data="show_limited")],
         [InlineKeyboardButton("🚫 کاربران مسدود", callback_data="show_blocked")],
-        [InlineKeyboardButton("⏳ تمدید اکانت", callback_data="extend_user")]
+        [InlineKeyboardButton("⏳ تمدید اکانت", callback_data="extend_user")],
+        [InlineKeyboardButton(" گزارش اکانت‌ها", callback_data="report_users")]
     ]
+        
 
     await update.message.reply_text("📲 پنل مدیریت SSH:", reply_markup=InlineKeyboardMarkup(keyboard))
 
@@ -251,6 +253,13 @@ async def report_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
         report += user_line
 
     await update.message.reply_text(report, parse_mode=ParseMode.MARKDOWN)
+
+#ساخت تابع واسط
+
+async def report_all_users_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    await report_all_users(update, context)
+    
 
 async def ask_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -1073,6 +1082,7 @@ def run_bot():
     app.add_handler(CallbackQueryHandler(show_blocked_users, pattern="^show_blocked$"))
     app.add_handler(CallbackQueryHandler(start_extend_user, pattern="^extend_user$"))
     app.add_handler(CallbackQueryHandler(end_extend_handler, pattern="^end_extend$"))
+    application.add_handler(CallbackQueryHandler(report_all_users_callback, pattern="^report_users$"))
 
     # حواست باشه که هندلر خاص‌تر باید قبل از عمومی ثبت بشه
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))  # برای قفل‌کردن
