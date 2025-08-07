@@ -180,6 +180,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await update.message.reply_text("📲 پنل مدیریت SSH:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+#تابع کمکی مشاهده  گزارش اکانت 
+#در آینده باید اپدیت بشه
+
+
+def get_user_traffic(username):
+    try:
+        log_path = f"/etc/sshmanager/logs/{username}.log"
+        if os.path.exists(log_path):
+            with open(log_path) as f:
+                return int(f.read().strip())
+    except:
+        pass
+    return 0
+
 #تابع اصلی گزارش گیری با دکمه
 
 async def report_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
