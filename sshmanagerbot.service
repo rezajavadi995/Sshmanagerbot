@@ -1,0 +1,31 @@
+#ساخت فایل سیستمی برای اجرای دائمی ربات
+
+cat > /etc/systemd/system/sshmanagerbot.service << 'EOD'
+[Unit]
+Description=SSH Manager Telegram Bot
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /root/sshmanagerbot.py
+Restart=always
+RestartSec=5
+User=root
+WorkingDirectory=/root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+##########
+#فعال سازی 
+
+systemctl daemon-reload
+systemctl enable sshmanagerbot.service
+systemctl start sshmanagerbot.service
+#دیدن وضعیت 
+systemctl status sshmanagerbot.service
+
+
+#دیدن لاگ اگر خواستی
+
+journalctl -u sshmanagerbot.service -f
