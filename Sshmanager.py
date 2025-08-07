@@ -159,8 +159,11 @@ def get_all_users_usage():
     # -------------------- HANDLERS --------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reply = get_reply_func(update)
     if update.effective_user.id != ADMIN_ID:
-        return await update.message.reply_text("❌ دسترسی غیرمجاز")
+        return await reply("⛔️ دسترسی ندارید.")
+    #if update.effective_user.id != ADMIN_ID:
+        #return await update.message.reply_text("❌ دسترسی غیرمجاز")
 
     fix_iptables()  # اجرای اسکریپت اصلاح iptables در شروع
     
