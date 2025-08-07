@@ -21,8 +21,8 @@ import requests
 from datetime import datetime
 
 LIMITS_DIR = "/etc/sshmanager/limits"
-BOT_TOKEN = "your_token"
-ADMIN_ID = "your id"
+BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
+ADMIN_ID = "8062924341"
 
 def send_alert(username, percent):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
