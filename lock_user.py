@@ -9,8 +9,8 @@ import subprocess
 import sys
 import requests
 
-BOT_TOKEN = "your token"
-ADMIN_ID = your id
+BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
+ADMIN_ID = 8062924341
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
