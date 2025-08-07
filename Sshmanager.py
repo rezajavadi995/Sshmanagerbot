@@ -23,8 +23,8 @@ from telegram.ext import (
 # بررسی و ساخت پوشه /etc/sshmanager/limits
 Path("/etc/sshmanager/limits").mkdir(parents=True, exist_ok=True)
 
-BOT_TOKEN = "توکن بات"
-ADMIN_ID = ایدی عددی
+BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
+ADMIN_ID = 8062924341
 PORT_PUBLIC = 443
 DOMAIN = "ssh.ultraspeed.shop"
 NOLOGIN_PATH = "/usr/sbin/nologin"
