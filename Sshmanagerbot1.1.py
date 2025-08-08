@@ -790,30 +790,73 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ---------- reporting helper ----------
 async def report_all_users_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
+    query = update.callback_query
+    await query.answer("در حال آماده‌سازی گزارش...")
     if update.effective_user.id != ADMIN_ID:
         return
-    users = [u for u in pwd.getpwall() if u.pw_uid >= 1000 and "/home" in u.pw_dir]
-    lines = ["📊 گزارش کلی کاربران:\n"]
-    for u in users:
-        uname = u.pw_name
-        limits_file = f"/etc/sshmanager/limits/{uname}.json"
-        if os.path.exists(limits_file):
-            try:
-                with open(limits_file) as f:
-                    d = json.load(f)
-                used = int(d.get("used",0))
-                limit = int(d.get("limit",0))
-                exp_ts = d.get("expire_timestamp")
-                remain = max(limit - used, 0) if limit>0 else None
-                exp_str = f"{(datetime.fromtimestamp(exp_ts)-datetime.now()).days} روز مانده" if exp_ts else "نامشخص"
-                lines.append(f"👤 `{uname}` — مصرف: {used//1024}MB / {limit//1024 if limit>0 else 'نامحدود'}MB — {exp_str}")
-            except Exception:
-                lines.append(f"👤 `{uname}` — خطا در خواندن فایل محدودیت")
-        else:
-            lines.append(f"👤 `{uname}` — نامحدود / بدون فایل محدودیت")
-    await update.callback_query.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
+    report_text = "📊 گزارش کلی کاربران\n\n"
+    limits_dir = "/etc/sshmanager/limits"
+
+    if not os.path.exists(limits_dir):
+        await query.message.reply_text("❌ پوشه محدودیت پیدا نشد.", reply_markup=main_menu_keyboard)
+        return
+
+    # Fetch users from the JSON files, not system commands
+    for file in os.listdir(limits_dir):
+        if file.endswith(".json"):
+            file_path = os.path.join(limits_dir, file)
+            try:
+                with open(file_path, "r") as f:
+                    user_data = json.load(f)
+
+                username = file.replace(".json", "")
+                
+                # Fetching user status (blocked or active)
+                if user_data.get("is_blocked", False):
+                    status = "🔒 غیرفعال"
+                else:
+                    status = "✅ فعال"
+
+                # Fetching and formatting usage
+                used_bytes = int(user_data.get("used", 0))
+                total_bytes = int(user_data.get("limit", 0))
+                used_mb = used_bytes // (1024 * 1024)
+                total_mb = total_bytes // (1024 * 1024)
+                
+                if total_mb > 0:
+                    usage_percent = (used_bytes / total_bytes) * 100
+                    usage_text = f"📶 {used_mb}MB / {total_mb}MB ({usage_percent:.0f}%)"
+                else:
+                    usage_text = "📶 نامحدود"
+
+                # Fetching and formatting expiration date
+                expire_timestamp = user_data.get("expire_timestamp")
+                if expire_timestamp:
+                    expire_date = datetime.fromtimestamp(expire_timestamp).strftime("%Y-%m-%d")
+                    days_left = (datetime.fromtimestamp(expire_timestamp) - datetime.now()).days
+                    if days_left >= 0:
+                        expire_text = f"⏳ {expire_date} ({days_left} روز مانده)"
+                    else:
+                        expire_text = f"⌛ منقضی‌شده ({expire_date})"
+                else:
+                    expire_text = "⏳ نامحدود"
+
+                report_text += (
+                    f"👤 `{username}`\n"
+                    f"وضعیت: {status}\n"
+                    f"مصرف: {usage_text}\n"
+                    f"انقضا: {expire_text}\n"
+                    f"--------------------\n"
+                )
+
+            except (json.JSONDecodeError, FileNotFoundError):
+                continue
+    
+    if len(report_text.splitlines()) > 2: # Checks if any user was found
+        await query.message.reply_text(report_text, parse_mode="Markdown", reply_markup=main_menu_keyboard)
+    else:
+        await query.message.reply_text("❌ هیچ کاربری برای گزارش یافت نشد.", reply_markup=main_menu_keyboard)
 
 # Before def run_bot():
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
