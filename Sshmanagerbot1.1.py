@@ -683,7 +683,7 @@ async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
         msg = "⚠️ هیچ کاربر حجمی پیدا نشد."
     await update.callback_query.message.reply_text(msg, parse_mode="Markdown")
 
-
+#مشاهده کاربران مسدود 
 async def show_blocked_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.callback_query.answer()
@@ -691,24 +691,34 @@ async def show_blocked_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.callback_query.answer("در حال دریافت لیست کاربران مسدود شده...")
 
     blocked_users = []
-    # Fetch all users
-    users = subprocess.getoutput("awk -F: '$3 >= 1000 {print $1}' /etc/passwd").splitlines()
-    for user in users:
-        try:
-            user_data = json.load(open(f"/etc/sshmanager/limits/{user}.json"))
-            if user_data.get("is_blocked", False):
-                 blocked_users.append(user)
-        except (FileNotFoundError, json.JSONDecodeError):
-            pass
+    limits_dir = "/etc/sshmanager/limits"
+
+    if not os.path.exists(limits_dir):
+        await update.callback_query.message.reply_text("❌ پوشه محدودیت پیدا نشد.")
+        return
+
+    for file in os.listdir(limits_dir):
+        if file.endswith(".json"):
+            file_path = os.path.join(limits_dir, file)
+            try:
+                with open(file_path, "r") as f:
+                    user_data = json.load(f)
+                
+                # Check the is_blocked flag
+                if user_data.get("is_blocked", False):
+                    username = file.replace(".json", "")
+                    blocked_users.append(username)
+            except (json.JSONDecodeError, FileNotFoundError):
+                continue
 
     if not blocked_users:
         message = "❗️ هیچ کاربر مسدودی یافت نشد."
     else:
         message = "✅ لیست کاربران مسدودشده:\n\n"
         for user in blocked_users:
-            message += f"?? {user}\n"
+            message += f"🔒 {user}\n"
 
-    await update.callback_query.message.reply_text(message, reply_markup=main_menu_keyboard)
+    await update.callback_query.message.reply_text(message, parse_mode="Markdown", reply_markup=main_menu_keyboard)
 
 # unified text handler for awaiting actions or quick menu commands
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
