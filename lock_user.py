@@ -1,6 +1,5 @@
 #اول دستور زیرو بزن تا پوشه ساخته بشه
 
-rm -rf /root/sshmanager/lock_user.py
 
 
 cat > /root/sshmanager/lock_user.py << 'EOF'
