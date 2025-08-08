@@ -10,6 +10,7 @@ from datetime import datetime
 BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
 ADMIN_ID = "8062924341"
 
+
 def notify_admin(username, expire_date):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     message = (
@@ -38,11 +39,21 @@ for user in users:
     try:
         exp = datetime.strptime(exp_date, "%b %d, %Y")
         if exp < datetime.now():
-            # استفاده از lock_user.py برای قفل حرفه‌ای
-            subprocess.run(["python3", "/root/sshmanager/lock_user.py", user])
-            notify_admin(user, exp.strftime("%Y-%m-%d"))
+            # Check if user is already blocked
+            limit_file_path = f"/etc/sshmanager/limits/{user}.json"
+            is_blocked = False
+            if os.path.exists(limit_file_path):
+                with open(limit_file_path, "r") as f:
+                    user_data = json.load(f)
+                is_blocked = user_data.get("is_blocked", False)
+
+            if not is_blocked:
+                # استفاده از lock_user.py برای قفل حرفه‌ای
+                subprocess.run(["python3", "/root/sshmanager/lock_user.py", user])
+                notify_admin(user, exp.strftime("%Y-%m-%d"))
     except Exception:
         continue
+
         
 EOF
 
