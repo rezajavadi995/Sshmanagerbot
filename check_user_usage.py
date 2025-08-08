@@ -21,7 +21,12 @@ import requests
 from datetime import datetime
 from pathlib import Path
 
-# ... سایر کدها
+# NEW: Define all required variables
+LIMITS_DIR = "/etc/sshmanager/limits"
+BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
+ADMIN_ID = "8062924341"
+NOLOGIN_PATH = "/usr/sbin/nologin"
+
 
 def send_alert(username, percent):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -60,6 +65,7 @@ for file in os.listdir(LIMITS_DIR):
                 data["alert_sent"] = False
                 with open(path, "w") as fw:
                     json.dump(data, fw, indent=4)
+
 EOF
 
 
