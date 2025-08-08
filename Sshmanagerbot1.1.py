@@ -203,14 +203,15 @@ async def handle_account_type(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_volume_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().upper()
+    volume_gb = 0
     volume_mb = 0
     try:
         if text.endswith("GB"):
-            volume_mb = int(float(text[:-2].strip()) * 1024)
+            volume_gb = float(text[:-2].strip())
+            volume_mb = int(volume_gb * 1024)
         elif text.endswith("MB"):
             volume_mb = int(float(text[:-2].strip()))
         else:
-            # number without unit -> assume MB
             volume_mb = int(float(text))
     except Exception:
         await update.message.reply_text("❌ حجم واردشده نامعتبر است. لطفاً مانند `30MB` یا `1.5GB` وارد کنید.")
@@ -220,9 +221,12 @@ async def handle_volume_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ حجم واردشده باید بزرگتر از صفر باشد.")
         return ASK_VOLUME
 
-    # store as MB (we'll convert to KB later)
-    context.user_data["volume"] = volume_mb
+    # NEW: Store the volume in KB correctly
+    context.user_data["volume"] = volume_mb * 1024
+    
     return await ask_expire(update, context)
+
+
 
 async def ask_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # for both callback and message flows this returns expire selection
