@@ -888,7 +888,6 @@ def run_bot():
             ASK_EXPIRE: [CallbackQueryHandler(make_account, pattern="^expire_\\d+[hd]$")]
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        per_message=True  # پارامتر اضافه شده
     )
 
     conv_extend = ConversationHandler(
@@ -900,7 +899,6 @@ def run_bot():
             ASK_ANOTHER_RENEW: [CallbackQueryHandler(handle_renew_another_action, pattern="^(renew_volume|renew_time|end_extend)$")]
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation), CallbackQueryHandler(end_extend_handler, pattern="^end_extend$")],
-        per_message=True  # پارامتر اضافه شده
     )
 
     conv_delete = ConversationHandler(
@@ -909,7 +907,6 @@ def run_bot():
             ASK_DELETE_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_input)]
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        per_message=True  # پارامتر اضافه شده
     )
 
     conv_unlock = ConversationHandler(
@@ -918,7 +915,6 @@ def run_bot():
             ASK_UNLOCK_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unlock_input)]
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
-        per_message=True  # پارامتر اضافه شده
     )
     
     # اضافه کردن Handlers به ترتیب صحیح:
@@ -943,10 +939,4 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
-
-
-
-
-
-
 EOF
