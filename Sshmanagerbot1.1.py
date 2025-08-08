@@ -154,24 +154,28 @@ def get_user_traffic(username):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = get_reply_func(update)
     if update.effective_user.id != ADMIN_ID:
-        return await reply("⛔️ دسترسی ندارید.")
+        return await reply("⛔ دسترسی ندارید.")
     fix_iptables()
     Path("/etc/sshmanager/limits").mkdir(parents=True, exist_ok=True)
 
     keyboard = [
-        [InlineKeyboardButton("✅️ ساخت اکانت SSH", callback_data="create_user")],
-        [InlineKeyboardButton("❌️ حذف اکانت", callback_data="delete_user")],
+        [InlineKeyboardButton("✅ ساخت اکانت SSH", callback_data="create_user")],
+        [InlineKeyboardButton("❌ حذف اکانت", callback_data="delete_user")],
         [
             InlineKeyboardButton("🔒 قفل‌کردن اکانت", callback_data="lock_user"),
             InlineKeyboardButton("🔓 بازکردن اکانت", callback_data="unlock_user")
         ],
-        [InlineKeyboardButton("📊 کاربران حجمی", callback_data="show_limited")],
+        [InlineKeyboardButton("⭕️ کاربران حجمی", callback_data="show_limited")],
         [InlineKeyboardButton("🚫 کاربران مسدود", callback_data="show_blocked")],
         [InlineKeyboardButton("⏳ تمدید اکانت", callback_data="extend_user")],
         [InlineKeyboardButton("📋 گزارش اکانت‌ها", callback_data="report_users")]
     ]
 
     await reply("📲 پنل مدیریت SSH:", reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    # NEW: Remove old physical keyboard
+    await reply("‌", reply_markup=ReplyKeyboardRemove())
+
 
 async def ask_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
