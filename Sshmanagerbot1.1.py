@@ -617,6 +617,9 @@ async def handle_delete_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
     
     try:
+        # NEW: Kill all active sessions before deleting
+        subprocess.run(["sudo", "pkill", "-u", username], check=False)
+        
         # Delete user
         subprocess.run(["sudo","userdel","-f",username], check=True)
         # Delete user's limit file
@@ -630,6 +633,7 @@ async def handle_delete_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(f"❌ حذف با خطا مواجه شد:\n`{e}`", parse_mode="Markdown")
 
     return ConversationHandler.END
+
 
 
 
