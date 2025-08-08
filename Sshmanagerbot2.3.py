@@ -13,7 +13,8 @@ import pwd
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ConversationHandler
@@ -978,7 +979,7 @@ def run_bot():
     # اضافه کردن Handlers به ترتیب صحیح:
     # 1. تمام ConversationHandlerها را ابتدا اضافه کنید.
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("menu", start))
+    app.add_handler(CommandHandler("menu", start ))
     app.add_handler(conv_create)
     app.add_handler(conv_extend)
     app.add_handler(conv_delete)
@@ -999,3 +1000,4 @@ def run_bot():
 if __name__ == "__main__":
     run_bot()
 EOF
+                    
