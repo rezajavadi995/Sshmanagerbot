@@ -717,6 +717,13 @@ async def report_all_users_callback(update: Update, context: ContextTypes.DEFAUL
             lines.append(f"👤 `{uname}` — نامحدود / بدون فایل محدودیت")
     await update.callback_query.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
+
+# Before def run_bot():
+async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancels a conversation."""
+    if update.effective_message:
+        await update.effective_message.reply_text("❌ عملیات لغو شد.", reply_markup=main_menu_keyboard)
+    return ConversationHandler.END
 # ---------- run ----------
 def run_bot():
     if not BOT_TOKEN:
@@ -733,7 +740,7 @@ def run_bot():
             ASK_VOLUME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_volume_input)],
             ASK_EXPIRE: [CallbackQueryHandler(make_account, pattern="^expire_\\d+[hd]$")]
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler("cancel", cancel_conversation)]
     )
 
     conv_extend = ConversationHandler(
@@ -767,4 +774,6 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+
+
 EOF
