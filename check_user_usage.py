@@ -24,6 +24,8 @@ LIMITS_DIR = "/etc/sshmanager/limits"
 BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
 ADMIN_ID = "8062924341"
 
+# ... سایر کدها
+
 def send_alert(username, percent):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     msg = (
@@ -39,12 +41,24 @@ for file in os.listdir(LIMITS_DIR):
         path = os.path.join(LIMITS_DIR, file)
         with open(path) as f:
             data = json.load(f)
+            
+            # New check: Skip if user is blocked
+            if data.get("is_blocked", False):
+                continue
+            
             used = int(data.get("used", 0))
             limit = int(data.get("limit", 1))  # پیش‌فرض برای جلوگیری از تقسیم بر صفر
             percent = (used / limit) * 100
-            if percent >= 90:
+            
+            if percent >= 90 and not data.get("alert_sent", False):
                 username = file.replace(".json", "")
                 send_alert(username, percent)
+                
+                # Set alert_sent to True to prevent repeated alerts
+                data["alert_sent"] = True
+                with open(path, "w") as fw:
+                    json.dump(data, fw, indent=4)
+
 EOF
 
 chmod +x /usr/local/bin/check_user_usage.py
