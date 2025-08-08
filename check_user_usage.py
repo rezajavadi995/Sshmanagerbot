@@ -19,10 +19,7 @@ cat > /usr/local/bin/check_user_usage.py << 'EOF'
 import os, json
 import requests
 from datetime import datetime
-
-LIMITS_DIR = "/etc/sshmanager/limits"
-BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
-ADMIN_ID = "8062924341"
+from pathlib import Path
 
 # ... سایر کدها
 
@@ -54,12 +51,17 @@ for file in os.listdir(LIMITS_DIR):
                 username = file.replace(".json", "")
                 send_alert(username, percent)
                 
-                # Set alert_sent to True to prevent repeated alerts
+                # Set alert_sent to True ONLY if alert is sent
                 data["alert_sent"] = True
                 with open(path, "w") as fw:
                     json.dump(data, fw, indent=4)
-
+            # NEW: If percent is below 90, reset alert_sent flag
+            elif percent < 90 and data.get("alert_sent", False):
+                data["alert_sent"] = False
+                with open(path, "w") as fw:
+                    json.dump(data, fw, indent=4)
 EOF
+
 
 chmod +x /usr/local/bin/check_user_usage.py
 
