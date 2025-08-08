@@ -609,16 +609,26 @@ async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 continue
             used = int(data.get("used",0))
             limit = int(data.get("limit",1))
-            percent = int((used / limit) * 100) if limit>0 else 0
+            percent = (used / limit) * 100 if limit > 0 else 0
+            
+            # Formatting used and limit values to be more readable (e.g., KB to MB)
+            used_mb = used // 1024
+            limit_mb = limit // 1024
+
             expire_text = ""
             if data.get("expire_timestamp"):
                 days_left = (int(data["expire_timestamp"]) - int(datetime.now().timestamp())) // 86400
-                expire_text = f" | ⏳ {days_left} روز مانده" if days_left >=0 else " | ⌛ منقضی‌شده"
-            emoji = "🟢"
-            if percent >= 90: emoji = "🔴"
-            elif percent >= 80: emoji = "🟠"
-            elif percent >= 60: emoji = "🟡"
-            msg += f"{emoji} `{username}` → {used//1024}MB / {limit//1024}MB ({percent}٪){expire_text}\n"
+                expire_text = f" | ⏳ {days_left} روز مانده" if days_left >= 0 else " | ⌛ منقضی‌شده"
+            
+            # Using appropriate emoji for the status
+            if percent >= 100: 
+                emoji = "🔴"
+            elif percent >= 90:
+                emoji = "🟠"
+            else: 
+                emoji = "🟢"
+
+            msg += f"{emoji} `{username}` → {used_mb}MB / {limit_mb}MB ({percent:.0f}٪){expire_text}\n"
             found = True
         except Exception:
             log.exception("reading limit file failed")
@@ -626,25 +636,32 @@ async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
         msg = "⚠️ هیچ کاربر حجمی پیدا نشد."
     await update.callback_query.message.reply_text(msg, parse_mode="Markdown")
 
+
 async def show_blocked_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
     if update.effective_user.id != ADMIN_ID:
+        await update.callback_query.answer()
         return
-    blocked = []
-    try:
-        result = subprocess.getoutput("getent passwd")
-        for line in result.splitlines():
-            parts = line.split(":")
-            if len(parts) >= 7 and parts[6].strip() == NOLOGIN_PATH:
-                username = parts[0]
-                if username not in ["nobody"]:
-                    blocked.append(username)
-    except Exception:
-        log.exception("show_blocked_users failed")
-    if not blocked:
-        await update.callback_query.message.reply_text("✅ هیچ کاربر مسدودی وجود ندارد.")
+    await update.callback_query.answer("در حال دریافت لیست کاربران مسدود شده...")
+
+    blocked_users = []
+    # Fetch all users
+    users = subprocess.getoutput("awk -F: '$3 >= 1000 {print $1}' /etc/passwd").splitlines()
+    for user in users:
+        try:
+            user_data = json.load(open(f"/etc/sshmanager/limits/{user}.json"))
+            if user_data.get("is_blocked", False):
+                 blocked_users.append(user)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+
+    if not blocked_users:
+        message = "❗️ هیچ کاربر مسدودی یافت نشد."
     else:
-        await update.callback_query.message.reply_text("🚫 لیست کاربران مسدودشده:\n\n" + "\n".join(f"🔒 {u}" for u in blocked))
+        message = "✅ لیست کاربران مسدودشده:\n\n"
+        for user in blocked_users:
+            message += f"?? {user}\n"
+
+    await update.callback_query.message.reply_text(message, reply_markup=main_menu_keyboard)
 
 # unified text handler for awaiting actions or quick menu commands
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
