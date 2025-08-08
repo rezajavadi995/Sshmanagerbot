@@ -655,16 +655,13 @@ async def end_extend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if query.from_user.id != ADMIN_ID:
         return ConversationHandler.END
 
-    username = context.user_data.get("username")
-    if not username:
-        await query.message.reply_text("❌ نام کاربری مشخص نشده است.")
-        return ConversationHandler.END
+    # یوزرنیم از مرحله قبل
+    username = context.user_data.get("username", "").strip()
 
-    # جلوگیری از ساخت اکانت با نام کاربری سیستمی  
+    # جلوگیری از ساخت اکانت با نام کاربری سیستمی
     uid_check = subprocess.getoutput(f"id -u {username}")
     if uid_check.isdigit() and int(uid_check) < 1000:
         await query.message.reply_text("⛔️ این نام کاربری سیستمی است و نمی‌توان برای آن اکانت ساخت.")
@@ -672,80 +669,77 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     password = random_str()
     acc_type = context.user_data.get("acc_type", "unlimited")
-    volume = context.user_data.get("volume", 0)
+
+    # تبدیل حجم به کیلوبایت واقعی
+    if acc_type == "limited":
+        volume_gb = context.user_data.get("volume", 0)
+        volume_kb = int(volume_gb) * 1024 * 1024  # تبدیل گیگ به کیلوبایت
+    else:
+        volume_kb = 0  # نامحدود
+
     period = query.data.replace("expire_", "")
 
-    # محاسبه تاریخ انقضا  
-    try:
-        if period.endswith("h"):
-            hours = int(period.replace("h", ""))
-            delta = timedelta(hours=hours)
-            expire_date = datetime.now() + delta
-            period_str = f"{hours} ساعته تستی"
-        else:
-            days = int(period.replace("d", ""))
-            delta = timedelta(days=days)
-            expire_date = datetime.now() + delta
-            period_str = f"{days} روزه"
-    except Exception:
-        await query.message.reply_text("❌ فرمت دوره نامعتبر است.")
-        return ConversationHandler.END
+    # محاسبه تاریخ انقضا
+    if period.endswith("h"):
+        delta = timedelta(hours=int(period.replace("h", "")))
+        expire_date = datetime.now() + delta
+        period_str = "۲ ساعته تستی"
+    else:
+        days = int(period.replace("d", ""))
+        delta = timedelta(days=days)
+        expire_date = datetime.now() + delta
+        period_str = f"{days} روزه"
 
     expire_str = expire_date.strftime("%Y-%m-%d %H:%M")
 
     try:
-        # بررسی وجود یوزر  
+        # بررسی وجود یوزر
         check_user = subprocess.getoutput(f"id -u {username}")
         if check_user.isdigit():
             await query.message.reply_text("❌ این یوزرنیم قبلاً ساخته شده. لطفاً یوزرنیم جدید وارد کنید.")
             return ConversationHandler.END
 
-        # ساخت یوزر بدون home با شل nologin  
+        # ساخت یوزر بدون home با شل nologin
         subprocess.run(["sudo", "useradd", "-M", "-s", NOLOGIN_PATH, username], check=True)
 
-        # تعیین رمز  
+        # تعیین رمز
         subprocess.run(["sudo", "chpasswd"], input=f"{username}:{password}".encode(), check=True)
 
-        # تنظیم تاریخ انقضا  
+        # تنظیم تاریخ انقضا
         subprocess.run(["sudo", "chage", "-E", expire_date.strftime("%Y-%m-%d"), username], check=True)
 
-        # افزودن به iptables (با بررسی وجود و ارور)  
+        # افزودن به iptables
         uid = subprocess.getoutput(f"id -u {username}").strip()
-
-        # بررسی وجود rule قبل از اضافه کردن  
-        rule_exists = subprocess.run(
+        subprocess.run(
             ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
+        result = subprocess.run(
+            ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+            stderr=subprocess.PIPE
+        )
+        if result.returncode != 0:
+            await query.message.reply_text("⚠️ اخطار: rule مربوط به iptables اضافه نشد. لطفاً بررسی کنید.")
 
-        if rule_exists.returncode != 0:
-            result = subprocess.run(
-                ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                stderr=subprocess.PIPE,
-            )
-            if result.returncode != 0:
-                await query.message.reply_text("⚠️ اخطار: rule مربوط به iptables اضافه نشد. لطفاً بررسی کنید.")
-
-        # ساخت فایل محدودیت اگر اکانت حجمی بود  
+        # ساخت فایل محدودیت اگر اکانت حجمی بود
         if acc_type == "limited":
             limits_dir = Path("/etc/sshmanager/limits")
             limits_dir.mkdir(parents=True, exist_ok=True)
             limit_file = limits_dir / f"{username}.json"
             data = {
-                "limit": volume,  # MB
+                "limit": volume_kb,  # کیلوبایت واقعی
                 "used": 0,
                 "type": "limited",
                 "expire": expire_str,
-                "expire_timestamp": int(expire_date.timestamp()),  # 🔥 این خط اضافه شده
+                "expire_timestamp": int(expire_date.timestamp())
             }
             with limit_file.open("w") as f:
                 json.dump(data, f)
 
-        # لاگ ساده  
-        print(f"[+] اکانت ساخته شد: {username}, UID: {uid}, نوع: {acc_type}, حجم: {volume} MB")
+        # لاگ ساده
+        print(f"[+] اکانت ساخته شد: {username}, UID: {uid}, نوع: {acc_type}, حجم: {volume_kb} KB")
 
-        # پیام موفقیت  
+        # پیام موفقیت
         await query.message.reply_text(
             f"✅ اکانت با موفقیت ساخته شد ({period_str}):\n\n{format_config(username, password, expire_str)}"
         )
