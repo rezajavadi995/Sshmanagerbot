@@ -527,7 +527,11 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     password = random_str(12)
     acc_type = context.user_data.get("acc_type","unlimited")
-    volume_mb = int(context.user_data.get("volume",0))  # MB
+    
+    # NEW: Get the volume directly in KB from user_data
+    # No need to multiply by 1024 again, as it was already done in handle_volume_input
+    limit_kb = int(context.user_data.get("volume", 0))  
+    
     period = query.data.replace("expire_","")
     if period.endswith("h"):
         delta = timedelta(hours=int(period.replace("h","")))
@@ -556,7 +560,6 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subprocess.run(["sudo","iptables","-A","SSH_USERS","-m","owner","--uid-owner",uid,"-j","ACCEPT"], check=False)
         # create limits file if limited
         if acc_type == "limited":
-            limit_kb = volume_mb * 1024  # MB -> KB
             limits_dir = Path("/etc/sshmanager/limits")
             limits_dir.mkdir(parents=True, exist_ok=True)
             limit_file = limits_dir / f"{username}.json"
@@ -577,6 +580,7 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.message.reply_text(f"❌ خطای پیش‌بینی‌نشده:\n{e}")
     return ConversationHandler.END
+
 #تابع حذف جدید جایگزین شد
 #async def delete_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     #await update.callback_query.answer()
