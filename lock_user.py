@@ -31,12 +31,32 @@ def lock_user(username):
         # تغییر زمان اکانت به گذشته
         subprocess.run(["usermod", "--expiredate", "1", username], check=True)
 
+        # به‌روزرسانی فایل JSON کاربر برای جلوگیری از پیام‌های اشتباه
+        limit_file_path = f"/etc/sshmanager/limits/{username}.json"
+        if os.path.exists(limit_file_path):
+            with open(limit_file_path, "r") as f:
+                user_data = json.load(f)
+            
+            user_data["used_bytes"] = 0
+            user_data["total_bytes"] = 0
+            user_data["limited"] = False
+            user_data["is_blocked"] = True
+            
+            with open(limit_file_path, "w") as f:
+                json.dump(user_data, f, indent=4)
+
+
         # حذف rule از iptables
         uid = subprocess.getoutput(f"id -u {username}").strip()
         subprocess.run(
             ["iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
             stderr=subprocess.DEVNULL,
         )
+
+        send_telegram_message(f"🔒 اکانت کاربر `{username}` به دلیل اتمام حجم یا زمان مسدود شد.")
+    except Exception as e:
+        send_telegram_message(f"⚠️ خطا در مسدودسازی کاربر {username}: {e}")
+
 
         send_telegram_message(f"🔒 اکانت کاربر `{username}` به دلیل اتمام حجم یا زمان مسدود شد.")
     except Exception as e:
