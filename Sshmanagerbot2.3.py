@@ -166,7 +166,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🔒 قفل‌کردن اکانت", callback_data="lock_user"),
             InlineKeyboardButton("🔓 بازکردن اکانت", callback_data="unlock_user")
         ],
-        [InlineKeyboardButton("⭕️ کاربران حجمی", callback_data="show_limited")],
+        [InlineKeyboardButton("📊 کاربران حجمی", callback_data="show_limited")],
         [InlineKeyboardButton("🚫 کاربران مسدود", callback_data="show_blocked")],
         [InlineKeyboardButton("⏳ تمدید اکانت", callback_data="extend_user")],
         [InlineKeyboardButton("📋 گزارش اکانت‌ها", callback_data="report_users")]
@@ -174,8 +174,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await reply("📲 پنل مدیریت SSH:", reply_markup=InlineKeyboardMarkup(keyboard))
     
-    # NEW: Remove old physical keyboard
-    await reply("‌", reply_markup=ReplyKeyboardRemove())
+    # NEW: Use a standard space character to avoid the "non-empty" error
+    await reply(" ", reply_markup=ReplyKeyboardRemove())
+
 
 
 async def ask_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
