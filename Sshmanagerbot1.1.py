@@ -447,7 +447,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_renew_another_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     if query.data == "renew_time":
         context.user_data["renew_action"] = "renew_time"
         keyboard = [
@@ -457,7 +457,7 @@ async def handle_renew_another_action(update: Update, context: ContextTypes.DEFA
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(f"⏰ زمان اکانت `{context.user_data['renew_username']}` را انتخاب کنید:", reply_markup=reply_markup, parse_mode="Markdown")
         return ASK_RENEW_VALUE
-    
+
     elif query.data == "renew_volume":
         context.user_data["renew_action"] = "renew_volume"
         keyboard = [
@@ -468,8 +468,18 @@ async def handle_renew_another_action(update: Update, context: ContextTypes.DEFA
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(f"📊 حجم اکانت `{context.user_data['renew_username']}` را انتخاب کنید:", reply_markup=reply_markup, parse_mode="Markdown")
         return ASK_RENEW_VALUE
+    
+    # NEW: Handle "No" button correctly which ends the conversation
+    elif query.data == "end_extend":
+        return await end_extend_handler(update, context)
+
+    # Handle cancel button correctly
+    elif query.data == "cancel":
+        await query.message.reply_text("✅ عملیات تمدید لغو شد.")
+        return ConversationHandler.END
         
     return ConversationHandler.END
+
 
 
 async def end_extend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -477,6 +487,7 @@ async def end_extend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     username = context.user_data.get("renew_username", "نامشخص")
     added_days = context.user_data.get("added_days", 0)
     added_gb = context.user_data.get("added_gb", 0)
+
     summary = f"✅ عملیات تمدید برای `{username}` به پایان رسید.\n"
     if added_days:
         summary += f"🕒 تمدید زمان: +{added_days} روز\n"
@@ -484,8 +495,14 @@ async def end_extend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         summary += f"📶 تمدید حجم: +{added_gb} GB\n"
     if not added_days and not added_gb:
         summary += "ℹ️ هیچ تغییری اعمال نشد."
+
     await update.callback_query.message.reply_text(summary, parse_mode="Markdown")
+
+    # NEW: Clear user data to prevent future conflicts
+    context.user_data.clear()
+    
     return ConversationHandler.END
+
 
 # ---------- create / delete / lock / unlock / listing handlers ----------
 
