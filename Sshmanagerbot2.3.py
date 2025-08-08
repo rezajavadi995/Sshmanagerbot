@@ -813,7 +813,9 @@ async def show_blocked_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
         for user in blocked_users:
             message += f"🔒 {user}\n"
 
-    await update.callback_query.message.reply_text(message, parse_mode="Markdown", reply_markup=main_menu_keyboard)
+    # NEW: Removed reply_markup to prevent old keyboard from reappearing
+    await update.callback_query.message.reply_text(message, parse_mode="Markdown")
+
 
 # unified text handler for awaiting actions or quick menu commands
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
