@@ -911,10 +911,11 @@ def run_bot():
             ASK_RENEW_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_extend_username)],
             ASK_RENEW_ACTION: [CallbackQueryHandler(handle_extend_action, pattern="^renew_")],
             ASK_RENEW_VALUE: [CallbackQueryHandler(handle_extend_value, pattern="^(add_days_|add_gb_)")],
-            ASK_ANOTHER_RENEW: [CallbackQueryHandler(handle_renew_another_action, pattern="^(renew_volume|renew_time|end_extend)$")]
+            ASK_ANOTHER_RENEW: [CallbackQueryHandler(handle_renew_another_action, pattern="^(renew_volume|renew_time|end_extend|cancel)$")]
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation), CallbackQueryHandler(end_extend_handler, pattern="^end_extend$")],
     )
+
 
     conv_delete = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_delete_user, pattern="^delete_user$")],
