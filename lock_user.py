@@ -7,6 +7,8 @@ cat > /root/sshmanager/lock_user.py << 'EOF'
 import subprocess
 import sys
 import requests
+import json
+import os
 
 BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
 ADMIN_ID = 8062924341
@@ -57,17 +59,12 @@ def lock_user(username):
     except Exception as e:
         send_telegram_message(f"⚠️ خطا در مسدودسازی کاربر {username}: {e}")
 
-
-        send_telegram_message(f"🔒 اکانت کاربر `{username}` به دلیل اتمام حجم یا زمان مسدود شد.")
-    except Exception as e:
-        send_telegram_message(f"⚠️ خطا در مسدودسازی کاربر {username}: {e}")
-
-
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python3 lock_user.py <username>")
         sys.exit(1)
     lock_user(sys.argv[1])
+
 EOF
 
 ##############
