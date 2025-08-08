@@ -611,25 +611,40 @@ async def ask_user_to_lock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["awaiting_lock"] = True
     await update.callback_query.message.reply_text("🛑 نام کاربری را برای *قفل کردن* وارد کنید:", parse_mode="Markdown")
 
+
+#تابع جدید قفل کردن کاربر
+async def start_lock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("🔒 لطفاً *نام کاربری* که می‌خواهید قفل کنید را وارد کنید:", parse_mode="Markdown")
+    return ASK_DELETE_USERNAME
+
+
+
+
 async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("awaiting_lock") != True:
-        return
     username = update.message.text.strip()
-    context.user_data["awaiting_lock"] = False
-    # uid check
+    
+    # NEW: Check if user exists and is not a system user
     try:
         uid = int(subprocess.getoutput(f"id -u {username}"))
         if uid < 1000:
             await update.message.reply_text("⛔️ کاربر سیستمی است؛ قابل قفل نیست.")
-            return
+            return ConversationHandler.END
     except Exception:
         await update.message.reply_text("❌ کاربر یافت نشد.")
-        return
+        return ConversationHandler.END
+
+    # Pass username to the locking function
     success = lock_user_account(username)
+    
     if success:
         await update.message.reply_text(f"🔒 اکانت `{username}` قفل شد.", parse_mode="Markdown")
     else:
         await update.message.reply_text("❌ خطا در قفل‌کردن اکانت.")
+    
+    # End the conversation after action is complete
+    return ConversationHandler.END
+
 #تابع جدید انلاک کردن کاربر
 
 
