@@ -931,6 +931,15 @@ def run_bot():
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
+
+    #جدید
+    conv_lock = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_lock_user, pattern="^lock_user$")],
+        states={
+            ASK_DELETE_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)],
+    )
     
     # اضافه کردن Handlers به ترتیب صحیح:
     # 1. تمام ConversationHandlerها را ابتدا اضافه کنید.
@@ -940,6 +949,7 @@ def run_bot():
     app.add_handler(conv_extend)
     app.add_handler(conv_delete)
     app.add_handler(conv_unlock)
+    app.add_handler(conv_lock)
 
     # 2. CallbackQueryHandlerهای غیر مکالمه‌ای را اضافه کنید.
     app.add_handler(CallbackQueryHandler(show_limited_users, pattern="^show_limited$"))
