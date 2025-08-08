@@ -880,42 +880,46 @@ def run_bot():
 
     # تعریف ConversationHandlerها (این بخش دست نخورده باقی می‌ماند)
     conv_create = ConversationHandler(
-        entry_points=[CallbackQueryHandler(ask_username, pattern="^create_user$")],
-        states={
-            ASK_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_account_type)],
-            ASK_TYPE: [CallbackQueryHandler(handle_account_type, pattern="^acc_type_")],
-            ASK_VOLUME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_volume_input)],
-            ASK_EXPIRE: [CallbackQueryHandler(make_account, pattern="^expire_\\d+[hd]$")]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)]
-    )
+    entry_points=[CallbackQueryHandler(ask_username, pattern="^create_user$")],
+    states={
+        ASK_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_account_type)],
+        ASK_TYPE: [CallbackQueryHandler(handle_account_type, pattern="^acc_type_")],
+        ASK_VOLUME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_volume_input)],
+        ASK_EXPIRE: [CallbackQueryHandler(make_account, pattern="^expire_\\d+[hd]$")]
+    },
+    fallbacks=[CommandHandler("cancel", cancel_conversation)],
+    per_message=True  # پارامتر اضافه شده
+)
 
-    conv_extend = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_extend_user, pattern="^extend_user$")],
-        states={
-            ASK_RENEW_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_extend_username)],
-            ASK_RENEW_ACTION: [CallbackQueryHandler(handle_extend_action, pattern="^renew_")],
-            ASK_RENEW_VALUE: [CallbackQueryHandler(handle_extend_value, pattern="^(add_days_|add_gb_)")],
-            ASK_ANOTHER_RENEW: [CallbackQueryHandler(handle_renew_another_action, pattern="^(renew_volume|renew_time|end_extend)$")]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation), CallbackQueryHandler(end_extend_handler, pattern="^end_extend$")]
-    )
+conv_extend = ConversationHandler(
+    entry_points=[CallbackQueryHandler(start_extend_user, pattern="^extend_user$")],
+    states={
+        ASK_RENEW_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_extend_username)],
+        ASK_RENEW_ACTION: [CallbackQueryHandler(handle_extend_action, pattern="^renew_")],
+        ASK_RENEW_VALUE: [CallbackQueryHandler(handle_extend_value, pattern="^(add_days_|add_gb_)")],
+        ASK_ANOTHER_RENEW: [CallbackQueryHandler(handle_renew_another_action, pattern="^(renew_volume|renew_time|end_extend)$")]
+    },
+    fallbacks=[CommandHandler("cancel", cancel_conversation), CallbackQueryHandler(end_extend_handler, pattern="^end_extend$")],
+    per_message=True  # پارامتر اضافه شده
+)
 
-    conv_delete = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_delete_user, pattern="^delete_user$")],
-        states={
-            ASK_DELETE_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_input)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)]
-    )
+conv_delete = ConversationHandler(
+    entry_points=[CallbackQueryHandler(start_delete_user, pattern="^delete_user$")],
+    states={
+        ASK_DELETE_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_input)]
+    },
+    fallbacks=[CommandHandler("cancel", cancel_conversation)],
+    per_message=True  # پارامتر اضافه شده
+)
 
-    conv_unlock = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_unlock_user, pattern="^unlock_user$")],
-        states={
-            ASK_UNLOCK_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unlock_input)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)]
-    )
+conv_unlock = ConversationHandler(
+    entry_points=[CallbackQueryHandler(start_unlock_user, pattern="^unlock_user$")],
+    states={
+        ASK_UNLOCK_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unlock_input)]
+    },
+    fallbacks=[CommandHandler("cancel", cancel_conversation)],
+    per_message=True  # پارامتر اضافه شده
+)
     
     # اضافه کردن Handlers به ترتیب صحیح:
     # 1. تمام ConversationHandlerها را ابتدا اضافه کنید.
