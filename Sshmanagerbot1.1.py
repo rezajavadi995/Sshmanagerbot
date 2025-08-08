@@ -35,6 +35,7 @@ Path("/etc/sshmanager/logs").mkdir(parents=True, exist_ok=True)
 ASK_USERNAME, ASK_TYPE, ASK_VOLUME, ASK_EXPIRE = range(4)
 ASK_RENEW_USERNAME, ASK_RENEW_ACTION, ASK_RENEW_VALUE = range(4, 7)
 ASK_DELETE_USERNAME = 7
+ASK_UNLOCK_USERNAME = 8
 main_menu_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         ["📊 وضعیت سیستم", "🛡 بررسی سلامت سرور"],
@@ -232,6 +233,7 @@ async def ask_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await caller.reply_text("⏱️ لطفاً مدت انتخاب شود:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ASK_EXPIRE
+
 
 # ------------- extend flow -------------
 async def start_extend_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -582,13 +584,58 @@ async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🔒 اکانت `{username}` قفل شد.", parse_mode="Markdown")
     else:
         await update.message.reply_text("❌ خطا در قفل‌کردن اکانت.")
+#تابع جدید انلاک کردن کاربر
 
-async def ask_user_to_unlock(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
+
+async def start_unlock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        return
-    context.user_data["awaiting_unlock"] = True
-    await update.callback_query.message.reply_text("✅ لطفاً نام کاربری که می‌خواهید باز شود را وارد کنید:", parse_mode="Markdown")
+        await update.callback_query.answer()
+        return ConversationHandler.END
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("🔓 لطفا نام کاربری را برای باز کردن اکانت وارد کنید:")
+    return ASK_UNLOCK_USERNAME
+
+async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.message.text.strip()
+    try:
+        # Check if user exists and is not a system user
+        uid = int(subprocess.getoutput(f"id -u {username}").strip())
+        if uid < 1000:
+            await update.message.reply_text("⛔️ این کاربر سیستمی است و نمی‌توان آن را باز کرد.")
+            return ConversationHandler.END
+    except Exception:
+        await update.message.reply_text("❌ کاربر یافت نشد.")
+        return ConversationHandler.END
+
+    try:
+        # Check if the user is a limited/blocked user
+        limit_file_path = f"/etc/sshmanager/limits/{username}.json"
+        is_blocked = False
+        if os.path.exists(limit_file_path):
+            with open(limit_file_path, "r") as f:
+                user_data = json.load(f)
+            is_blocked = user_data.get("is_blocked", False)
+
+        if not is_blocked:
+            await update.message.reply_text("⚠️ اکانت قفل نیست.")
+            return ConversationHandler.END
+
+        # Unlock the user
+        subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=True)
+        subprocess.run(["sudo", "passwd", "-u", username], check=True)
+        subprocess.run(["sudo", "usermod", "--expiredate", "''", username], check=True)
+
+        # Update the JSON file
+        user_data["is_blocked"] = False
+        with open(limit_file_path, "w") as f:
+            json.dump(user_data, f, indent=4)
+        
+        await update.message.reply_text(f"✅ اکانت `{username}` با موفقیت باز شد.", parse_mode="Markdown", reply_markup=main_menu_keyboard)
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ باز کردن اکانت با خطا مواجه شد:\n`{e}`", parse_mode="Markdown")
+
+    return ConversationHandler.END
 
 async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -668,41 +715,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     text = update.message.text.strip()
-    
-
-    # unlocking flow
-    if context.user_data.get("awaiting_unlock"):
-        username = text
-        context.user_data["awaiting_unlock"] = False
-        # check limits (if limited and exhausted -> instruct to renew)
-        limits_file = f"/etc/sshmanager/limits/{username}.json"
-        restricted = False
-        if os.path.exists(limits_file):
-            try:
-                with open(limits_file) as f:
-                    d = json.load(f)
-                limit = int(d.get("limit",0))
-                used = int(d.get("used",0))
-                if limit > 0 and used >= limit:
-                    restricted = True
-                if d.get("expire_timestamp") and int(d["expire_timestamp"]) <= int(datetime.now().timestamp()):
-                    restricted = True
-            except Exception:
-                pass
-        if restricted:
-            await update.message.reply_text("⚠️ اکانت به دلیل اتمام حجم یا انقضا محدود شده؛ ابتدا تمدید کنید.")
-            return
-        try:
-            subprocess.run(["sudo","usermod","-s","/bin/bash",username], check=False)
-            subprocess.run(["sudo","passwd","-u",username], check=False)
-            uid = subprocess.getoutput(f"id -u {username}").strip()
-            rule_check = subprocess.run(["sudo","iptables","-C","SSH_USERS","-m","owner","--uid-owner",uid,"-j","ACCEPT"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if rule_check.returncode != 0:
-                subprocess.run(["sudo","iptables","-A","SSH_USERS","-m","owner","--uid-owner",uid,"-j","ACCEPT"], check=False)
-            await update.message.reply_text(f"✅ اکانت `{username}` باز شد.", parse_mode="Markdown")
-        except Exception as e:
-            await update.message.reply_text(f"❌ خطا در فعال‌سازی:\n`{e}`", parse_mode="Markdown")
-        return
 
     # menu commands
     if text == "📊 وضعیت سیستم":
@@ -767,6 +779,7 @@ def run_bot():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    # تعریف ConversationHandlerها
     conv_create = ConversationHandler(
         entry_points=[CallbackQueryHandler(ask_username, pattern="^create_user$")],
         states={
@@ -785,11 +798,9 @@ def run_bot():
             ASK_RENEW_ACTION: [CallbackQueryHandler(handle_extend_action, pattern="^renew_")],
             ASK_RENEW_VALUE: [CallbackQueryHandler(handle_extend_value, pattern="^(add_days_|add_gb_)")]
         },
-        fallbacks=[]
+        fallbacks=[CommandHandler("cancel", cancel_conversation)] # fallback اضافه شد
     )
 
-      #مکالمه حذف کاربر
-    
     conv_delete = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_delete_user, pattern="^delete_user$")],
         states={
@@ -797,33 +808,40 @@ def run_bot():
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)]
     )
-    
-    app.add_handler(conv_delete)
-    
-    # ... سایر کدهای add_handler ...
 
-
+    conv_unlock = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_unlock_user, pattern="^unlock_user$")],
+        states={
+            ASK_UNLOCK_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_unlock_input)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)]
+    )
+    
+    # اضافه کردن Handlers به اپلیکیشن
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("menu", start))  # reuse start for menu
+    app.add_handler(CommandHandler("menu", start))
     app.add_handler(conv_create)
     app.add_handler(conv_extend)
+    app.add_handler(conv_delete)
+    app.add_handler(conv_unlock)
 
-    app.add_handler(CallbackQueryHandler(delete_user_handler, pattern="^delete_user$"))
-    app.add_handler(CallbackQueryHandler(ask_user_to_lock, pattern="^lock_user$"))
-    app.add_handler(CallbackQueryHandler(ask_user_to_unlock, pattern="^unlock_user$"))
     app.add_handler(CallbackQueryHandler(show_limited_users, pattern="^show_limited$"))
     app.add_handler(CallbackQueryHandler(show_blocked_users, pattern="^show_blocked$"))
     app.add_handler(CallbackQueryHandler(end_extend_handler, pattern="^end_extend$"))
     app.add_handler(CallbackQueryHandler(report_all_users_callback, pattern="^report_users$"))
-
+    
+    # حذف Handlers قدیمی که با ConversationHandlerها تداخل دارند
+    # app.add_handler(CallbackQueryHandler(delete_user_handler, pattern="^delete_user$"))
+    # app.add_handler(CallbackQueryHandler(ask_user_to_unlock, pattern="^unlock_user$"))
+    # app.add_handler(CallbackQueryHandler(ask_user_to_lock, pattern="^lock_user$"))
+    
     # text handlers (order matters)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))  # for lock flow
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))       # general
-
+    
     app.run_polling()
 
 if __name__ == "__main__":
     run_bot()
-
 
 EOF
