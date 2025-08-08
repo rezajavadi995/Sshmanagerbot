@@ -36,6 +36,7 @@ ASK_USERNAME, ASK_TYPE, ASK_VOLUME, ASK_EXPIRE = range(4)
 ASK_RENEW_USERNAME, ASK_RENEW_ACTION, ASK_RENEW_VALUE = range(4, 7)
 ASK_DELETE_USERNAME = 7
 ASK_UNLOCK_USERNAME = 8
+ASK_ANOTHER_RENEW = 9
 main_menu_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         ["📊 وضعیت سیستم", "🛡 بررسی سلامت سرور"],
@@ -339,6 +340,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
     username = context.user_data.get("renew_username", "")
     action = context.user_data.get("renew_action", "")
     data = query.data
+    
     added_days = 0
     added_gb = 0
 
@@ -387,6 +389,12 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 log.exception("updating expire_timestamp failed")
         await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
         context.user_data["added_days"] = added_days
+        
+        # New: Ask if user wants to extend volume as well
+        keyboard = [[InlineKeyboardButton("➕ تمدید حجم", callback_data="renew_volume"), InlineKeyboardButton("❌ خیر", callback_data="end_extend")]]
+        await query.message.reply_text("آیا می‌خواهید حجم هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ASK_ANOTHER_RENEW
+
 
     elif action == "renew_volume" and data.startswith("add_gb_"):
         gb = int(data.replace("add_gb_", ""))
@@ -397,9 +405,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 with open(limits_file,"r") as f:
                     j = json.load(f)
                 # stored limits are in KB; add gb -> MB -> KB
-                add_kb = gb * 1024 * 1024 // 1024  # gb*1024*1024 KB? simpler: gb*1024*1024 KB divided by 1024 -> gb*1024*1024/1024 = gb*1024*1024/1024 = gb*1024
-                # simpler: 1 GB = 1024 MB = 1024*1024 KB
-                add_kb = gb * 1024 * 1024
+                add_kb = gb * 1024 * 1024 
                 j["limit"] = int(j.get("limit",0)) + add_kb
                 with open(limits_file,"w") as f:
                     json.dump(j,f)
@@ -414,17 +420,51 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 subprocess.run(["sudo","iptables","-A","SSH_USERS","-m","owner","--uid-owner",uid,"-j","ACCEPT"], check=False)
             await query.message.reply_text(f"📶 حجم اکانت `{username}` به مقدار {gb}GB افزایش یافت.", parse_mode="Markdown")
             context.user_data["added_gb"] = added_gb
+
         else:
             await query.message.reply_text("❌ فایل محدودیت پیدا نشد.")
 
-    # follow-up prompt
-    if added_days and not added_gb:
-        await query.message.reply_text("آیا می‌خواهید حجم هم تمدید شود؟", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ تمدید حجم", callback_data="renew_volume"), InlineKeyboardButton("❌ خیر", callback_data="end_extend")]]))
-    elif added_gb and not added_days:
-        await query.message.reply_text("آیا می‌خواهید زمان هم تمدید شود؟", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("➕ تمدید زمان", callback_data="renew_time"), InlineKeyboardButton("❌ خیر", callback_data="end_extend")]]))
-    elif added_gb and added_days:
+        # New: Ask if user wants to extend time as well
+        keyboard = [[InlineKeyboardButton("➕ تمدید زمان", callback_data="renew_time"), InlineKeyboardButton("❌ خیر", callback_data="end_extend")]]
+        await query.message.reply_text("آیا می‌خواهید زمان هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ASK_ANOTHER_RENEW
+    
+    # New: End conversation if both were done in a single step
+    if added_gb and added_days:
         await query.message.reply_text(f"✅ تمدید انجام شد:\n👤 `{username}`\n🕒 +{added_days} روز\n📶 +{added_gb}GB", parse_mode="Markdown")
+        return ConversationHandler.END
 
+    return ConversationHandler.END
+
+#کد جدید ادامه کانورسیشن
+
+async def handle_renew_another_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "ask_renew_time":
+        # Reset renew_action to renew time
+        context.user_data["renew_action"] = "renew_time"
+        keyboard = [
+            [InlineKeyboardButton("۳۰ روز", callback_data="add_days_30"), InlineKeyboardButton("۶۰ روز", callback_data="add_days_60"), InlineKeyboardButton("۹۰ روز", callback_data="add_days_90")],
+            [InlineKeyboardButton("بازگشت", callback_data="cancel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"⏰ زمان اکانت `{context.user_data['renew_username']}` را انتخاب کنید:", reply_markup=reply_markup, parse_mode="Markdown")
+        return ASK_RENEW_VALUE
+    
+    elif query.data == "ask_renew_volume":
+        # Reset renew_action to renew volume
+        context.user_data["renew_action"] = "renew_volume"
+        keyboard = [
+            [InlineKeyboardButton("5GB", callback_data="add_gb_5"), InlineKeyboardButton("10GB", callback_data="add_gb_10"), InlineKeyboardButton("20GB", callback_data="add_gb_20")],
+            [InlineKeyboardButton("50GB", callback_data="add_gb_50"), InlineKeyboardButton("100GB", callback_data="add_gb_100")],
+            [InlineKeyboardButton("بازگشت", callback_data="cancel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"📊 حجم اکانت `{context.user_data['renew_username']}` را انتخاب کنید:", reply_markup=reply_markup, parse_mode="Markdown")
+        return ASK_RENEW_VALUE
+        
     return ConversationHandler.END
 
 async def end_extend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
