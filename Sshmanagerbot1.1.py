@@ -67,6 +67,10 @@ def lock_user_account(username: str) -> bool:
     try:
         subprocess.run(["sudo", "passwd", "-l", username], check=True)
         subprocess.run(["sudo", "usermod", "-s", NOLOGIN_PATH, username], check=True)
+        
+        # New: kill all active sessions for the user
+        subprocess.run(["sudo", "pkill", "-u", username], check=False)
+
         # remove iptables rule if exists
         try:
             uid = subprocess.getoutput(f"id -u {username}").strip()
@@ -77,6 +81,7 @@ def lock_user_account(username: str) -> bool:
     except Exception as e:
         log.exception("lock_user_account failed")
         return False
+
 
 def fix_iptables():
     try:
@@ -443,8 +448,7 @@ async def handle_renew_another_action(update: Update, context: ContextTypes.DEFA
     query = update.callback_query
     await query.answer()
     
-    if query.data == "ask_renew_time":
-        # Reset renew_action to renew time
+    if query.data == "renew_time":
         context.user_data["renew_action"] = "renew_time"
         keyboard = [
             [InlineKeyboardButton("۳۰ روز", callback_data="add_days_30"), InlineKeyboardButton("۶۰ روز", callback_data="add_days_60"), InlineKeyboardButton("۹۰ روز", callback_data="add_days_90")],
@@ -454,8 +458,7 @@ async def handle_renew_another_action(update: Update, context: ContextTypes.DEFA
         await query.edit_message_text(f"⏰ زمان اکانت `{context.user_data['renew_username']}` را انتخاب کنید:", reply_markup=reply_markup, parse_mode="Markdown")
         return ASK_RENEW_VALUE
     
-    elif query.data == "ask_renew_volume":
-        # Reset renew_action to renew volume
+    elif query.data == "renew_volume":
         context.user_data["renew_action"] = "renew_volume"
         keyboard = [
             [InlineKeyboardButton("5GB", callback_data="add_gb_5"), InlineKeyboardButton("10GB", callback_data="add_gb_10"), InlineKeyboardButton("20GB", callback_data="add_gb_20")],
@@ -467,6 +470,7 @@ async def handle_renew_another_action(update: Update, context: ContextTypes.DEFA
         return ASK_RENEW_VALUE
         
     return ConversationHandler.END
+
 
 async def end_extend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
