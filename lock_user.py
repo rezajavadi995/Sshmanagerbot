@@ -25,7 +25,11 @@ def lock_user(username):
         # غیرفعال کردن شل و قفل کردن اکانت
         subprocess.run(["usermod", "-s", "/usr/sbin/nologin", username], check=True)
         subprocess.run(["passwd", "-l", username], check=True)
-        #تغییر زمان اکانت به گذشته
+        
+        # قطع کردن اتصالات فعال SSH کاربر
+        subprocess.run(["pkill", "-u", username], check=False)
+        
+        # تغییر زمان اکانت به گذشته
         subprocess.run(["usermod", "--expiredate", "1", username], check=True)
 
         # حذف rule از iptables
@@ -38,6 +42,7 @@ def lock_user(username):
         send_telegram_message(f"🔒 اکانت کاربر `{username}` به دلیل اتمام حجم یا زمان مسدود شد.")
     except Exception as e:
         send_telegram_message(f"⚠️ خطا در مسدودسازی کاربر {username}: {e}")
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
