@@ -841,14 +841,16 @@ def run_bot():
         fallbacks=[CommandHandler("cancel", cancel_conversation)]
     )
 
+    # نسخه نهایی و اصلاح‌شده conv_extend
     conv_extend = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_extend_user, pattern="^extend_user$")],
         states={
             ASK_RENEW_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_extend_username)],
             ASK_RENEW_ACTION: [CallbackQueryHandler(handle_extend_action, pattern="^renew_")],
-            ASK_RENEW_VALUE: [CallbackQueryHandler(handle_extend_value, pattern="^(add_days_|add_gb_)")]
+            ASK_RENEW_VALUE: [CallbackQueryHandler(handle_extend_value, pattern="^(add_days_|add_gb_)")],
+            ASK_ANOTHER_RENEW: [CallbackQueryHandler(handle_renew_another_action, pattern="^(renew_volume|renew_time|end_extend)$")]
         },
-        fallbacks=[CommandHandler("cancel", cancel_conversation)] # fallback اضافه شد
+        fallbacks=[CommandHandler("cancel", cancel_conversation), CallbackQueryHandler(end_extend_handler, pattern="^end_extend$")]
     )
 
     conv_delete = ConversationHandler(
@@ -877,14 +879,12 @@ def run_bot():
 
     app.add_handler(CallbackQueryHandler(show_limited_users, pattern="^show_limited$"))
     app.add_handler(CallbackQueryHandler(show_blocked_users, pattern="^show_blocked$"))
-    app.add_handler(CallbackQueryHandler(end_extend_handler, pattern="^end_extend$"))
     app.add_handler(CallbackQueryHandler(report_all_users_callback, pattern="^report_users$"))
     
-    # حذف Handlers قدیمی که با ConversationHandlerها تداخل دارند
-    # app.add_handler(CallbackQueryHandler(delete_user_handler, pattern="^delete_user$"))
-    # app.add_handler(CallbackQueryHandler(ask_user_to_unlock, pattern="^unlock_user$"))
-    # app.add_handler(CallbackQueryHandler(ask_user_to_lock, pattern="^lock_user$"))
-    
+    # Handlers قدیمی که با ConversationHandlerها تداخل دارند، حذف شده‌اند.
+    # app.add_handler(CallbackQueryHandler(end_extend_handler, pattern="^end_extend$")) 
+    # این handler به عنوان fallback در conv_extend اضافه شده است.
+
     # text handlers (order matters)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))  # for lock flow
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))       # general
@@ -893,5 +893,7 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+
+
 
 EOF
