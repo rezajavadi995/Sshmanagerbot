@@ -226,7 +226,8 @@ async def ask_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caller = update.callback_query.message
     else:
         caller = update.message
-    context.user_data['username'] = context.user_data.get('username', caller.text.strip())
+    # خط زیر حذف شد چون نام کاربری قبلاً در ask_account_type ذخیره شده است.
+    # context.user_data['username'] = context.user_data.get('username', caller.text.strip())
     keyboard = [
         [InlineKeyboardButton("⌛️ یک ماهه", callback_data="expire_30d")],
         [InlineKeyboardButton("⏳️ دو ماهه", callback_data="expire_60d")],
@@ -540,7 +541,8 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "type": "limited",
                 "expire": expire_str,
                 "expire_timestamp": int(expire_date.timestamp()),
-                "start_timestamp": int(datetime.now().timestamp())
+                "start_timestamp": int(datetime.now().timestamp()),
+                "is_blocked": False # فیلد جدید برای حل باگ ۳
             }
             with open(limit_file,"w") as f:
                 json.dump(data,f)
@@ -872,7 +874,7 @@ def run_bot():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # تعریف ConversationHandlerها
+    # تعریف ConversationHandlerها (این بخش دست نخورده باقی می‌ماند)
     conv_create = ConversationHandler(
         entry_points=[CallbackQueryHandler(ask_username, pattern="^create_user$")],
         states={
@@ -884,7 +886,6 @@ def run_bot():
         fallbacks=[CommandHandler("cancel", cancel_conversation)]
     )
 
-    # نسخه نهایی و اصلاح‌شده conv_extend
     conv_extend = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_extend_user, pattern="^extend_user$")],
         states={
@@ -912,7 +913,8 @@ def run_bot():
         fallbacks=[CommandHandler("cancel", cancel_conversation)]
     )
     
-    # اضافه کردن Handlers به اپلیکیشن
+    # اضافه کردن Handlers به ترتیب صحیح:
+    # 1. تمام ConversationHandlerها را ابتدا اضافه کنید.
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))
     app.add_handler(conv_create)
@@ -920,15 +922,12 @@ def run_bot():
     app.add_handler(conv_delete)
     app.add_handler(conv_unlock)
 
+    # 2. CallbackQueryHandlerهای غیر مکالمه‌ای را اضافه کنید.
     app.add_handler(CallbackQueryHandler(show_limited_users, pattern="^show_limited$"))
     app.add_handler(CallbackQueryHandler(show_blocked_users, pattern="^show_blocked$"))
     app.add_handler(CallbackQueryHandler(report_all_users_callback, pattern="^report_users$"))
     
-    # Handlers قدیمی که با ConversationHandlerها تداخل دارند، حذف شده‌اند.
-    # app.add_handler(CallbackQueryHandler(end_extend_handler, pattern="^end_extend$")) 
-    # این handler به عنوان fallback در conv_extend اضافه شده است.
-
-    # text handlers (order matters)
+    # 3. MessageHandlerهای متنی را در انتها اضافه کنید تا با مکالمه تداخل نداشته باشند.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))  # for lock flow
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))       # general
     
@@ -936,6 +935,8 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
+
+
 
 
 
