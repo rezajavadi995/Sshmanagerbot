@@ -508,13 +508,53 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.message.reply_text(f"❌ خطای پیش‌بینی‌نشده:\n{e}")
     return ConversationHandler.END
+#تابع حذف جدید جایگزین شد
+#async def delete_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #await update.callback_query.answer()
+    #if update.effective_user.id != ADMIN_ID:
+        #return
+    #await update.callback_query.message.reply_text("لطفاً نام کاربری را برای حذف وارد کنید:")
+    #context.user_data["awaiting_delete"] = True
 
-async def delete_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
+
+# تابع جدید برای شروع مکالمه حذف اکانت
+async def start_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        return
-    await update.callback_query.message.reply_text("لطفاً نام کاربری را برای حذف وارد کنید:")
-    context.user_data["awaiting_delete"] = True
+        await update.callback_query.answer()
+        return ConversationHandler.END
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text("❗️ لطفا نام کاربری را برای حذف وارد کنید:")
+    return ASK_DELETE_USERNAME
+
+# تابع جدید برای مدیریت حذف اکانت
+async def handle_delete_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.message.text.strip()
+    try:
+        # Check if user exists and is not a system user
+        uid = int(subprocess.getoutput(f"id -u {username}").strip())
+        if uid < 1000:
+            await update.message.reply_text("⛔️ این کاربر سیستمی است و حذف نمی‌شود.")
+            return ConversationHandler.END
+    except Exception:
+        await update.message.reply_text("❌ کاربر یافت نشد.")
+        return ConversationHandler.END
+    
+    try:
+        # Delete user
+        subprocess.run(["sudo","userdel","-f",username], check=True)
+        # Delete user's limit file
+        limit_file_path = f"/etc/sshmanager/limits/{username}.json"
+        if os.path.exists(limit_file_path):
+            os.remove(limit_file_path)
+
+        await update.message.reply_text(f"✅ اکانت `{username}` حذف شد.", parse_mode="Markdown", reply_markup=main_menu_keyboard)
+
+    except Exception as e:
+        await update.message.reply_text(f"❌ حذف با خطا مواجه شد:\n`{e}`", parse_mode="Markdown")
+
+    return ConversationHandler.END
+
+
 
 async def ask_user_to_lock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
@@ -611,29 +651,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
     text = update.message.text.strip()
-    # delete flow
-    if context.user_data.get("awaiting_delete"):
-        username = text
-        context.user_data["awaiting_delete"] = False
-        try:
-            pwd.getpwnam(username)
-        except KeyError:
-            await update.message.reply_text("❌ کاربر یافت نشد.")
-            return
-        try:
-            uid = int(subprocess.getoutput(f"id -u {username}").strip())
-            if uid < 1000:
-                await update.message.reply_text("⛔️ این کاربر سیستمی است و حذف نمی‌شود.")
-                return
-        except Exception:
-            await update.message.reply_text("❌ خطا در بررسی UID.")
-            return
-        try:
-            subprocess.run(["sudo","userdel","-f",username], check=True)
-            await update.message.reply_text(f"✅ اکانت `{username}` حذف شد.", parse_mode="Markdown")
-        except Exception as e:
-            await update.message.reply_text(f"❌ حذف با خطا مواجه شد:\n`{e}`", parse_mode="Markdown")
-        return
+    
 
     # unlocking flow
     if context.user_data.get("awaiting_unlock"):
@@ -752,6 +770,21 @@ def run_bot():
         },
         fallbacks=[]
     )
+
+      #مکالمه حذف کاربر
+    
+    conv_delete = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_delete_user, pattern="^delete_user$")],
+        states={
+            ASK_DELETE_USERNAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_delete_input)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_conversation)]
+    )
+    
+    app.add_handler(conv_delete)
+    
+    # ... سایر کدهای add_handler ...
+
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start))  # reuse start for menu
