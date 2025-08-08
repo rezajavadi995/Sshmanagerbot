@@ -34,7 +34,7 @@ Path("/etc/sshmanager/logs").mkdir(parents=True, exist_ok=True)
 # conversation states
 ASK_USERNAME, ASK_TYPE, ASK_VOLUME, ASK_EXPIRE = range(4)
 ASK_RENEW_USERNAME, ASK_RENEW_ACTION, ASK_RENEW_VALUE = range(4, 7)
-
+ASK_DELETE_USERNAME = 7
 main_menu_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         ["📊 وضعیت سیستم", "🛡 بررسی سلامت سرور"],
