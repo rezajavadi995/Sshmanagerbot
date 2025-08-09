@@ -1,7 +1,7 @@
 #نسخه جدید  ساخت فایل لاگ 
 #حتما بعد خرید سرور این دستورو بزن
 #بعد بهش با دستور زیر دسترسی اجرا بده: 
-chmod +x /usr/local/bin/log_user_traffic.py
+#chmod +x /usr/local/bin/log_user_traffic.py
 
 cat > /usr/local/bin/log_user_traffic.py << 'EOF'
 #!/usr/bin/env python3
