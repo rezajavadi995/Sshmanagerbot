@@ -577,7 +577,8 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "expire": expire_str,
                 "expire_timestamp": int(expire_date.timestamp()),
                 "start_timestamp": int(datetime.now().timestamp()),
-                "is_blocked": False # فیلد جدید برای حل باگ ۳
+                "is_blocked": False
+                "block_reason": None
             }
             with open(limit_file,"w") as f:
                 json.dump(data,f)
@@ -804,7 +805,8 @@ async def show_blocked_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 # Check the is_blocked flag
                 if user_data.get("is_blocked", False):
                     username = file.replace(".json", "")
-                    blocked_users.append(username)
+                    reason = user_data.get("block_reason", "unknown")
+                    blocked_users.append(f"{username} ({reason})")
             except (json.JSONDecodeError, FileNotFoundError):
                 continue
 
@@ -873,7 +875,13 @@ async def report_all_users_callback(update: Update, context: ContextTypes.DEFAUL
                 
                 # Fetching user status (blocked or active)
                 if user_data.get("is_blocked", False):
-                    status = "🔒 غیرفعال"
+                    reason_map = {
+                        "manual": "دستی",
+                        "quota": "حجمی",
+                        "expire": "انقضا"
+                    }
+                    reason = reason_map.get(user_data.get("block_reason"), "نامشخص")
+                    status = f"🔒 مسدود ({reason})"
                 else:
                     status = "✅ فعال"
 
