@@ -577,7 +577,7 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "expire": expire_str,
                 "expire_timestamp": int(expire_date.timestamp()),
                 "start_timestamp": int(datetime.now().timestamp()),
-                "is_blocked": False
+                "is_blocked": False,
                 "block_reason": None
             }
             with open(limit_file,"w") as f:
