@@ -678,7 +678,18 @@ async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🔒 اکانت `{username}` قفل شد.", parse_mode="Markdown")
     else:
         await update.message.reply_text("❌ خطا در قفل‌کردن اکانت.")
-    
+
+
+    # بروزرسانی JSON برای ثبت دلیل قفل دستی
+    limit_file_path = f"/etc/sshmanager/limits/{username}.json"
+    if os.path.exists(limit_file_path):
+        with open(limit_file_path, "r") as f:
+            user_data = json.load(f)
+        user_data["is_blocked"] = True
+        user_data["block_reason"] = "manual"
+        with open(limit_file_path, "w") as f:
+            json.dump(user_data, f, indent=4)
+        
     # End the conversation after action is complete
     return ConversationHandler.END
 
