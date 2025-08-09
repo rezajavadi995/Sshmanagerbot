@@ -43,6 +43,20 @@ def lock_user(username):
             user_data["total_bytes"] = 0
             user_data["limited"] = False
             user_data["is_blocked"] = True
+
+            # اگر دلیل قبلاً ثبت نشده، بر اساس شرایط مقداردهی کن
+            if "block_reason" not in user_data or user_data["block_reason"] is None:
+            # اگر از حجمی قفل شده
+                if "check_user_usage.py" in sys.argv[0]:
+                    user_data["block_reason"] = "quota"
+                # اگر از انقضا قفل شده
+                elif "check_users_expire.py" in sys.argv[0]:
+                    user_data["block_reason"] = "expire"
+                else:
+                    user_data["block_reason"] = "manual"
+
+
+            
             
             with open(limit_file_path, "w") as f:
                 json.dump(user_data, f, indent=4)
