@@ -1,5 +1,5 @@
 #این نسخه  فعلا باگ ساخت اکانت برطرف شده ولی هنوز باگ داره
-cat > /root/sshmanagerbot7.py << 'EOF'
+#cat > /root/sshmanagerbot7.py << 'EOF'
 #!/usr/bin/env python3
 # sshmanagerbot_fixed.py
 import os
@@ -1032,5 +1032,5 @@ def run_bot():
 
 if __name__ == "__main__":
     run_bot()
-EOF
+#EOF
                     
