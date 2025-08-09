@@ -174,8 +174,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await reply("📲 پنل مدیریت SSH:", reply_markup=InlineKeyboardMarkup(keyboard))
     
-    # NEW: Use a standard space character to avoid the "non-empty" error
-    await reply(" ", reply_markup=ReplyKeyboardRemove())
+    # NEW: از یک نقطه به جای فاصله خالی برای جلوگیری از خطای "Text must be non-empty" استفاده شد.
+    await reply(".", reply_markup=ReplyKeyboardRemove())
+
 
 
 
