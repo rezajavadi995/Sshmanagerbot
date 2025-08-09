@@ -736,6 +736,7 @@ async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # Update the JSON file
         user_data["is_blocked"] = False
+        user_data["block_reason"] = None
         with open(limit_file_path, "w") as f:
             json.dump(user_data, f, indent=4)
         
