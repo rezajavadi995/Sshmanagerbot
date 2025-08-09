@@ -1,0 +1,17 @@
+
+
+
+#ساخت systemd.timer برای اجرا هر ساعت:
+
+
+cat > /etc/systemd/system/check-usage.timer << 'EOF'
+[Unit]
+Description=Check SSH User Traffic Hourly
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+
+[Install]
+WantedBy=timers.target
+EOF
