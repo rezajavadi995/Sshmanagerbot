@@ -877,15 +877,23 @@ async def report_all_users_callback(update: Update, context: ContextTypes.DEFAUL
                 else:
                     status = "✅ فعال"
 
-                # Fetching and formatting usage
-                used_bytes = int(user_data.get("used", 0))
-                total_bytes = int(user_data.get("limit", 0))
-                used_mb = used_bytes // (1024 * 1024)
-                total_mb = total_bytes // (1024 * 1024)
-                
-                if total_mb > 0:
-                    usage_percent = (used_bytes / total_bytes) * 100
-                    usage_text = f"📶 {used_mb}MB / {total_mb}MB ({usage_percent:.0f}%)"
+                # NEW: Correctly fetch and format usage from KB to MB/GB
+                used_kb = int(user_data.get("used", 0))
+                limit_kb = int(user_data.get("limit", 0))
+
+                if limit_kb > 0:
+                    used_mb = used_kb / 1024
+                    limit_mb = limit_kb / 1024
+
+                    if limit_mb > 1024:
+                        used_gb = used_mb / 1024
+                        limit_gb = limit_mb / 1024
+                        usage_text = f"📶 {used_gb:.2f}GB / {limit_gb:.2f}GB"
+                    else:
+                        usage_text = f"📶 {used_mb:.2f}MB / {limit_mb:.2f}MB"
+                    
+                    usage_percent = (used_kb / limit_kb) * 100
+                    usage_text += f" ({usage_percent:.0f}%)"
                 else:
                     usage_text = "📶 نامحدود"
 
@@ -916,6 +924,7 @@ async def report_all_users_callback(update: Update, context: ContextTypes.DEFAUL
         await query.message.reply_text(report_text, parse_mode="Markdown", reply_markup=main_menu_keyboard)
     else:
         await query.message.reply_text("❌ هیچ کاربری برای گزارش یافت نشد.", reply_markup=main_menu_keyboard)
+
 
 # Before def run_bot():
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
