@@ -1,4 +1,4 @@
-cat > /root/updater_bot.py << 'EOF'
+#cat > /root/updater_bot.py << 'EOF'
 import os
 import subprocess
 import traceback
@@ -414,4 +414,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-EOF
+#EOF
