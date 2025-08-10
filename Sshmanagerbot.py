@@ -38,15 +38,7 @@ ASK_RENEW_USERNAME, ASK_RENEW_ACTION, ASK_RENEW_VALUE = range(4, 7)
 ASK_DELETE_USERNAME = 7
 ASK_UNLOCK_USERNAME = 8
 ASK_ANOTHER_RENEW = 9
-main_menu_keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        ["📊 وضعیت سیستم", "🛡 بررسی سلامت سرور"],
-        ["🔎 بررسی پورت و دامنه", "⚠ فایل‌های مشکوک"],
-        ["📋 لیست کاربران", "📉 مصرف کاربران"],
-        ["بازگشت به منو"]
-    ],
-    resize_keyboard=True
-)
+
 
 # ---------- utilities ----------
 log = logging.getLogger("sshmanager")
@@ -916,23 +908,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     text = update.message.text.strip()
 
-    # menu commands
-    if text == "📊 وضعیت سیستم":
-        await update.message.reply_text(get_system_stats(), reply_markup=main_menu_keyboard)
-    elif text == "🛡 بررسی سلامت سرور":
-        await update.message.reply_text("✅ ربات در حال اجراست.", reply_markup=main_menu_keyboard)
-    elif text == "🔎 بررسی پورت و دامنه":
-        await update.message.reply_text(check_ports_and_ping(), reply_markup=main_menu_keyboard)
-    elif text == "⚠ فایل‌های مشکوک":
-        await update.message.reply_text(find_suspicious_files(), reply_markup=main_menu_keyboard)
-    elif text == "📋 لیست کاربران":
-        users = list_real_users()
-        await update.message.reply_text("\n".join(users) or "هیچ کاربری یافت نشد.", reply_markup=main_menu_keyboard)
-    elif text == "📉 مصرف کاربران":
-        await update.message.reply_text(get_all_users_usage(), reply_markup=main_menu_keyboard)
-    elif text == "بازگشت به منو":
-        await update.message.reply_text("↩ بازگشت به منوی اصلی", reply_markup=main_menu_keyboard)
-
+    
+    
 # ---------- reporting helper ----------
 async def report_all_users_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
