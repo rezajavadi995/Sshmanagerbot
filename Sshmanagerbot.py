@@ -345,7 +345,6 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
 
 ###################
 
-
 async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
