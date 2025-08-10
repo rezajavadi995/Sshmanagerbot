@@ -658,41 +658,62 @@ async def start_lock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.message.text.strip()
-    
-    # NEW: Check if user exists and is not a system user
     try:
-        uid = int(subprocess.getoutput(f"id -u {username}"))
+        # Check if user exists and is not a system user
+        uid = int(subprocess.getoutput(f"id -u {username}").strip())
         if uid < 1000:
-            await update.message.reply_text("⛔️ کاربر سیستمی است؛ قابل قفل نیست.")
+            await update.message.reply_text("⛔️ این کاربر سیستمی است و نمی‌توان آن را باز کرد.")
             return ConversationHandler.END
     except Exception:
         await update.message.reply_text("❌ کاربر یافت نشد.")
         return ConversationHandler.END
 
-    # Pass username to the locking function
-    success = lock_user_account(username)
-    
-    if success:
-        await update.message.reply_text(f"🔒 اکانت `{username}` قفل شد.", parse_mode="Markdown")
-    else:
-        await update.message.reply_text("❌ خطا در قفل‌کردن اکانت.")
+    try:
+        # Check if the user is a limited/blocked user
+        limit_file_path = f"/etc/sshmanager/limits/{username}.json"
+        is_blocked = False
+        if os.path.exists(limit_file_path):
+            with open(limit_file_path, "r") as f:
+                user_data = json.load(f)
+            is_blocked = user_data.get("is_blocked", False)
 
+        if not is_blocked:
+            await update.message.reply_text("⚠️ اکانت قفل نیست.")
+            return ConversationHandler.END
 
-    # بروزرسانی JSON برای ثبت دلیل قفل دستی
-    limit_file_path = f"/etc/sshmanager/limits/{username}.json"
-    if os.path.exists(limit_file_path):
-        with open(limit_file_path, "r") as f:
-            user_data = json.load(f)
-        user_data["is_blocked"] = True
-        user_data["block_reason"] = "manual"
+        # 🔓 Unlock the user (فقط تونل، بدون لاگین مستقیم)
+        subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)  # شل بدون دسترسی
+        subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)       # مسیر هوم غیرواقعی
+        subprocess.run(["sudo", "passwd", "-u", username], check=False)                        # باز کردن پسورد
+        subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)                   # حذف تاریخ انقضا
+
+        # ✅ بازگرداندن دسترسی iptables
+        uid = subprocess.getoutput(f"id -u {username}").strip()
+        if uid.isdigit():
+            subprocess.run(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
+            subprocess.run(["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
+
+        # Update the JSON file
+        user_data["is_blocked"] = False
+        user_data["block_reason"] = None
         with open(limit_file_path, "w") as f:
             json.dump(user_data, f, indent=4)
         
-    # End the conversation after action is complete
-    return ConversationHandler.END
+        await update.message.reply_text(
+            f"✅ اکانت `{username}` با موفقیت باز شد.",
+            parse_mode="Markdown",
+            reply_markup=main_menu_keyboard
+        )
 
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ باز کردن اکانت با خطا مواجه شد:\n`{e}`",
+            parse_mode="Markdown"
+        )
+
+    return ConversationHandler.END
 #تابع جدید انلاک کردن کاربر
 
 
