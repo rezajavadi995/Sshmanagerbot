@@ -351,8 +351,7 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.message.reply_text(f"📶 حجم فعلی `{username}`: `{current_volume}`\n\nمقدار اضافه:", reply_markup=InlineKeyboardMarkup(keyboard))
         return ASK_RENEW_VALUE
 
-
-
+###################
 
 
 async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -361,7 +360,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
     username = context.user_data.get("renew_username", "")
     action = context.user_data.get("renew_action", "")
     data = query.data
-    
+
     added_days = 0
     added_gb = 0
 
@@ -370,13 +369,14 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     uid = subprocess.getoutput(f"id -u {username}").strip()
+    limits_file = f"/etc/sshmanager/limits/{username}.json"
 
     # --- تمدید زمان ---
     if action == "renew_time" and data.startswith("add_days_"):
         days = int(data.replace("add_days_", ""))
         added_days = days
 
-        # تاریخ فعلی انقضا را بخوان
+        # خواندن تاریخ فعلی انقضا
         output = subprocess.getoutput(f"chage -l {username} 2>/dev/null")
         current_exp = ""
         for line in output.splitlines():
@@ -395,16 +395,17 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         subprocess.run(["sudo", "chage", "-E", new_date.strftime("%Y-%m-%d"), username], check=False)
 
-        # 📌 بعد از آپدیت limits_file → آنلاک خودکار اگر قفل موقت بوده
-        limits_file = f"/etc/sshmanager/limits/{username}.json"
+        # خواندن فایل محدودیت
         try:
             with open(limits_file, "r") as f:
                 j = json.load(f)
         except Exception:
             j = {}
 
+        # آنلاک خودکار اگر قفل موقت بوده
         if j.get("is_blocked", False) and j.get("block_reason") != "manual":
-            subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=False)
+            subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)
+            subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)
             subprocess.run(["sudo", "passwd", "-u", username], check=False)
             subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
 
@@ -421,10 +422,12 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             j["is_blocked"] = False
             j["block_reason"] = None
             j["alert_sent"] = False
-            with open(limits_file, "w") as fw:
-                json.dump(j, fw, indent=4)
 
-        # پیام موفقیت
+        # به‌روزرسانی expire_timestamp
+        j["expire_timestamp"] = int(new_date.timestamp())
+        with open(limits_file, "w") as fw:
+            json.dump(j, fw, indent=4)
+
         await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
         context.user_data["added_days"] = added_days
 
@@ -440,7 +443,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
     elif action == "renew_volume" and data.startswith("add_gb_"):
         gb = int(data.replace("add_gb_", ""))
         added_gb = gb
-        limits_file = f"/etc/sshmanager/limits/{username}.json"
+
         if os.path.exists(limits_file):
             try:
                 with open(limits_file, "r") as f:
@@ -449,11 +452,11 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 j = {}
 
             add_kb = gb * 1024 * 1024
-            j["limit"] = int(j.get("limit", 0)) + add_kb
+            j["limit"] = int(j.get("limit", 0)) + add_kb  # اضافه کردن به حجم قبلی
 
-            # 📌 آنلاک خودکار اگر قفل موقت بوده
             if j.get("is_blocked", False) and j.get("block_reason") != "manual":
-                subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=False)
+                subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)
+                subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)
                 subprocess.run(["sudo", "passwd", "-u", username], check=False)
                 subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
 
@@ -496,6 +499,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     return ConversationHandler.END
+
 #کد جدید ادامه کانورسیشن
 
 async def handle_renew_another_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
