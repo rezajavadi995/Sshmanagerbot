@@ -155,7 +155,7 @@ def get_user_traffic(username):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = get_reply_func(update)
     if update.effective_user.id != ADMIN_ID:
-        return await reply("⛔ دسترسی ندارید.")
+        return await reply("⛔ لطفا برای خرید به ایدی @UspeedManage پیام بدهید ⛔️")
     fix_iptables()
     Path("/etc/sshmanager/limits").mkdir(parents=True, exist_ok=True)
 
