@@ -1,4 +1,4 @@
-cat > /root/updater_bot.py << 'EOF'
+#cat > /root/updater_bot.py << 'EOF'
 import os
 import subprocess
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
