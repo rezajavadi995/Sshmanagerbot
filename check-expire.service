@@ -1,0 +1,7 @@
+
+[Unit]
+Description=Check and disable expired users
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/check_users_expire.py
