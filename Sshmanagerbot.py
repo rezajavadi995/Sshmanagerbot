@@ -421,38 +421,150 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             try:
                 with open(limits_file,"r") as f:
                     j = json.load(f)
-                # stored limits are in KB; add gb -> MB -> KB
-                add_kb = gb * 1024 * 1024 
-                j["limit"] = int(j.get("limit",0)) + add_kb
-                with open(limits_file,"w") as f:
-                    json.dump(j,f)
-            except Exception:
-                await query.message.reply_text("❌ خطا در به‌روزرسانی فایل محدودیت.")
-                return ConversationHandler.END
 
+
+
+async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    username = context.user_data.get("renew_username", "")
+    action = context.user_data.get("renew_action", "")
+    data = query.data
+    
+    added_days = 0
+    added_gb = 0
+
+    if not username or not action:
+        await query.message.reply_text("❌ اطلاعات تمدید ناقص است.")
+        return ConversationHandler.END
+
+    uid = subprocess.getoutput(f"id -u {username}").strip()
+
+    # --- تمدید زمان ---
+    if action == "renew_time" and data.startswith("add_days_"):
+        days = int(data.replace("add_days_", ""))
+        added_days = days
+
+        # تاریخ فعلی انقضا را بخوان
+        output = subprocess.getoutput(f"chage -l {username} 2>/dev/null")
+        current_exp = ""
+        for line in output.splitlines():
+            if "Account expires" in line:
+                current_exp = line.split(":", 1)[1].strip()
+                break
+
+        if current_exp.lower() != "never" and current_exp:
+            try:
+                current_date = datetime.strptime(current_exp, "%b %d, %Y")
+                new_date = current_date + timedelta(days=days)
+            except Exception:
+                new_date = datetime.now() + timedelta(days=days)
+        else:
+            new_date = datetime.now() + timedelta(days=days)
+
+        subprocess.run(["sudo", "chage", "-E", new_date.strftime("%Y-%m-%d"), username], check=False)
+
+        # 📌 بعد از آپدیت limits_file → آنلاک خودکار اگر قفل موقت بوده
+        limits_file = f"/etc/sshmanager/limits/{username}.json"
+        try:
+            with open(limits_file, "r") as f:
+                j = json.load(f)
+        except Exception:
+            j = {}
+
+        if j.get("is_blocked", False) and j.get("block_reason") != "manual":
             subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=False)
             subprocess.run(["sudo", "passwd", "-u", username], check=False)
-            rule_check = subprocess.run(["sudo","iptables","-C","SSH_USERS","-m","owner","--uid-owner",uid,"-j","ACCEPT"], stderr=subprocess.DEVNULL)
-            if rule_check.returncode != 0:
-                subprocess.run(["sudo","iptables","-A","SSH_USERS","-m","owner","--uid-owner",uid,"-j","ACCEPT"], check=False)
+            subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
+
+            rc = subprocess.run(
+                ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                stderr=subprocess.DEVNULL
+            ).returncode
+            if rc != 0:
+                subprocess.run(
+                    ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                    check=False
+                )
+
+            j["is_blocked"] = False
+            j["block_reason"] = None
+            j["alert_sent"] = False
+            with open(limits_file, "w") as fw:
+                json.dump(j, fw, indent=4)
+
+        # پیام موفقیت
+        await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
+        context.user_data["added_days"] = added_days
+
+        # پیشنهاد تمدید حجم
+        keyboard = [
+            [InlineKeyboardButton("➕ تمدید حجم", callback_data="renew_volume"),
+             InlineKeyboardButton("❌ خیر", callback_data="end_extend")]
+        ]
+        await query.message.reply_text("آیا می‌خواهید حجم هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ASK_ANOTHER_RENEW
+
+    # --- تمدید حجم ---
+    elif action == "renew_volume" and data.startswith("add_gb_"):
+        gb = int(data.replace("add_gb_", ""))
+        added_gb = gb
+        limits_file = f"/etc/sshmanager/limits/{username}.json"
+        if os.path.exists(limits_file):
+            try:
+                with open(limits_file, "r") as f:
+                    j = json.load(f)
+            except Exception:
+                j = {}
+
+            add_kb = gb * 1024 * 1024
+            j["limit"] = int(j.get("limit", 0)) + add_kb
+
+            # 📌 آنلاک خودکار اگر قفل موقت بوده
+            if j.get("is_blocked", False) and j.get("block_reason") != "manual":
+                subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=False)
+                subprocess.run(["sudo", "passwd", "-u", username], check=False)
+                subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
+
+                rc = subprocess.run(
+                    ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                    stderr=subprocess.DEVNULL
+                ).returncode
+                if rc != 0:
+                    subprocess.run(
+                        ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                        check=False
+                    )
+
+                j["is_blocked"] = False
+                j["block_reason"] = None
+                j["alert_sent"] = False
+
+            with open(limits_file, "w") as f:
+                json.dump(j, f, indent=4)
+
             await query.message.reply_text(f"📶 حجم اکانت `{username}` به مقدار {gb}GB افزایش یافت.", parse_mode="Markdown")
             context.user_data["added_gb"] = added_gb
-
         else:
             await query.message.reply_text("❌ فایل محدودیت پیدا نشد.")
 
-        # New: Ask if user wants to extend time as well
-        keyboard = [[InlineKeyboardButton("➕ تمدید زمان", callback_data="renew_time"), InlineKeyboardButton("❌ خیر", callback_data="end_extend")]]
+        # پیشنهاد تمدید زمان
+        keyboard = [
+            [InlineKeyboardButton("➕ تمدید زمان", callback_data="renew_time"),
+             InlineKeyboardButton("❌ خیر", callback_data="end_extend")]
+        ]
         await query.message.reply_text("آیا می‌خواهید زمان هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
         return ASK_ANOTHER_RENEW
-    
-    # New: End conversation if both were done in a single step
+
+    # --- پایان ---
     if added_gb and added_days:
-        await query.message.reply_text(f"✅ تمدید انجام شد:\n👤 `{username}`\n🕒 +{added_days} روز\n📶 +{added_gb}GB", parse_mode="Markdown")
+        await query.message.reply_text(
+            f"✅ تمدید انجام شد:\n👤 `{username}`\n🕒 +{added_days} روز\n📶 +{added_gb}GB",
+            parse_mode="Markdown"
+        )
         return ConversationHandler.END
 
     return ConversationHandler.END
-
 #کد جدید ادامه کانورسیشن
 
 async def handle_renew_another_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
