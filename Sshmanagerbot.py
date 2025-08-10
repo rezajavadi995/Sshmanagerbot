@@ -929,12 +929,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users = list_real_users()
         await update.message.reply_text("\n".join(users) or "هیچ کاربری یافت نشد.", reply_markup=main_menu_keyboard)
     elif text == "📉 مصرف کاربران":
-        # show basic usage for all users
-        report = []
-        for u in list_real_users():
-            used_kb = get_user_traffic(u)
-            report.append(f"{u}: {used_kb//1024}MB")
-        await update.message.reply_text("\n".join(report) or "هیچ کاربری یافت نشد.", reply_markup=main_menu_keyboard)
+        await update.message.reply_text(get_all_users_usage(), reply_markup=main_menu_keyboard)
     elif text == "بازگشت به منو":
         await update.message.reply_text("↩ بازگشت به منوی اصلی", reply_markup=main_menu_keyboard)
 
