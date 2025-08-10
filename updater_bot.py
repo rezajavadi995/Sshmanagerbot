@@ -1,4 +1,4 @@
-#cat > /root/updater_bot.py << 'EOF'
+cat > /root/updater_bot.py << 'EOF'
 import os
 import subprocess
 import traceback
@@ -386,7 +386,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 def main():
-    app = ApplicationBuilder().token("YOUR_BOT_TOKEN").build()
+    app = ApplicationBuilder().token("7666791827:AAH9o2QxhvT2QbzAHKjbWmDhaieDCiT1ldY").build()
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -414,4 +414,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-#EOF
+EOF
