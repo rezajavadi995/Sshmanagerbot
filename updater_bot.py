@@ -1,0 +1,257 @@
+#ربات اپدیت فایل از گیت روی سرور
+#cat > /root/updater_bot.py << 'EOF'
+import os
+import subprocess
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
+)
+
+ADMIN_ID = 8062924341
+REPO_PATH = "/root/sshmanager_repo"
+
+# مراحل مکالمه اضافه کردن فایل جدید
+ASK_NAME, ASK_SOURCE, ASK_DEST, ASK_SERVICE, ASK_CHMOD = range(5)
+
+# دیکشنری پیش‌فرض فایل‌ها و سرویس‌ها
+FILES_AND_SERVICES = {
+    "Sshmanagerbot.py": {
+        "source": f"{REPO_PATH}/Sshmanagerbot.py",
+        "dest": "/root/sshmanagerbot.py",
+        "service": "sshmanagerbot.service",
+        "chmod": None,
+    },
+    "check_user_usage.py": {
+        "source": f"{REPO_PATH}/check_user_usage.py",
+        "dest": "/usr/local/bin/check_user_usage.py",
+        "service": None,
+        "chmod": None,
+    },
+    "check_users_expire.py": {
+        "source": f"{REPO_PATH}/check_users_expire.py",
+        "dest": "/usr/local/bin/check_users_expire.py",
+        "service": None,
+        "chmod": None,
+    },
+    "lock_user.py": {
+        "source": f"{REPO_PATH}/lock_user.py",
+        "dest": "/root/sshmanager/lock_user.py",
+        "service": None,
+        "chmod": None,
+    },
+    "log_user_traffic.py": {
+        "source": f"{REPO_PATH}/log_user_traffic.py",
+        "dest": "/usr/local/bin/log_user_traffic.py",
+        "service": None,
+        "chmod": None,
+    },
+}
+
+def is_admin(user_id: int) -> bool:
+    return user_id == ADMIN_ID
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    keyboard = [
+        [InlineKeyboardButton(f"⭕️ آپدیت {name}", callback_data=f"update_{name}")]
+        for name in FILES_AND_SERVICES.keys()
+    ]
+    keyboard.append([InlineKeyboardButton("➕ افزودن فایل جدید", callback_data="add_new_file")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "کدام فایل را می‌خواهید آپدیت کنید یا فایل جدید اضافه کنید؟",
+        reply_markup=reply_markup,
+    )
+
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    if not is_admin(user_id):
+        await query.edit_message_text("شما ادمین نیستید.")
+        return ConversationHandler.END
+
+    data = query.data
+
+    if data == "add_new_file":
+        await query.edit_message_text("مرحله 1/5\nلطفاً نام فایل را وارد کنید (مثلاً my_script.py):")
+        return ASK_NAME
+
+    if data.startswith("update_"):
+        filename = data[len("update_"):]
+        info = FILES_AND_SERVICES.get(filename)
+        if not info:
+            await query.edit_message_text("فایل مورد نظر یافت نشد.")
+            return ConversationHandler.END
+
+        try:
+            git_pull = subprocess.run(
+                ["git", "-C", REPO_PATH, "pull"], capture_output=True, text=True
+            )
+            if git_pull.returncode != 0:
+                await query.edit_message_text(
+                    f"❌ خطا در دریافت آخرین تغییرات از گیت:\n{git_pull.stderr}"
+                )
+                return ConversationHandler.END
+
+            cp_cmd = subprocess.run(
+                ["cp", info["source"], info["dest"]], capture_output=True, text=True
+            )
+            if cp_cmd.returncode != 0:
+                await query.edit_message_text(f"❌ خطا در کپی فایل:\n{cp_cmd.stderr}")
+                return ConversationHandler.END
+
+            chmod_output = ""
+            if info.get("chmod") and info["chmod"].lower() != "none":
+                chmod_cmd = subprocess.run(
+                    ["chmod", info["chmod"], info["dest"]], capture_output=True, text=True
+                )
+                if chmod_cmd.returncode != 0:
+                    await query.edit_message_text(f"❌ خطا در اعمال chmod:\n{chmod_cmd.stderr}")
+                    return ConversationHandler.END
+                chmod_output = f"chmod output:\n{chmod_cmd.stdout}{chmod_cmd.stderr}\n"
+
+            systemctl_output = ""
+            if info.get("service"):
+                # reload daemon before restart to make sure changes detected
+                subprocess.run(["systemctl", "daemon-reload"], check=True)
+                restart_cmd = subprocess.run(
+                    ["systemctl", "restart", info["service"]], capture_output=True, text=True
+                )
+                enable_cmd = subprocess.run(
+                    ["systemctl", "enable", info["service"]], capture_output=True, text=True
+                )
+                if restart_cmd.returncode != 0:
+                    await query.edit_message_text(
+                        f"❌ خطا در ریستارت سرویس {info['service']}:\n{restart_cmd.stderr}"
+                    )
+                    return ConversationHandler.END
+                systemctl_output = (
+                    f"systemctl restart output:\n{restart_cmd.stdout}{restart_cmd.stderr}\n"
+                    f"systemctl enable output:\n{enable_cmd.stdout}{enable_cmd.stderr}\n"
+                )
+
+            msg = f"✅ فایل {filename} با موفقیت آپدیت شد.\n\n"
+            msg += f"git pull output:\n{git_pull.stdout}{git_pull.stderr}\n"
+            msg += f"cp output:\n{cp_cmd.stdout}{cp_cmd.stderr}\n"
+            if chmod_output:
+                msg += chmod_output
+            if systemctl_output:
+                msg += systemctl_output
+
+            await query.edit_message_text(msg)
+        except subprocess.CalledProcessError as e:
+            await query.edit_message_text(f"❌ خطا در آپدیت فایل {filename}:\n{e}")
+
+        return ConversationHandler.END
+
+async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    context.user_data["new_file"] = {}
+    name = update.message.text.strip()
+    if not name:
+        await update.message.reply_text("نام فایل نمی‌تواند خالی باشد. لطفاً دوباره وارد کنید:")
+        return ASK_NAME
+    context.user_data["new_file"]["name"] = name
+    await update.message.reply_text("مرحله 2/5\nمسیر فایل منبع داخل مخزن (نسبت به پوشه repo) را وارد کنید (مثلاً scripts/my_script.py):")
+    return ASK_SOURCE
+
+async def add_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    source = update.message.text.strip()
+    if not source:
+        await update.message.reply_text("مسیر فایل منبع نمی‌تواند خالی باشد. لطفاً دوباره وارد کنید:")
+        return ASK_SOURCE
+    context.user_data["new_file"]["source"] = os.path.join(REPO_PATH, source)
+    await update.message.reply_text("مرحله 3/5\nمسیر فایل مقصد در سرور را وارد کنید (مثلاً /usr/local/bin/my_script.py):")
+    return ASK_DEST
+
+async def add_dest(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dest = update.message.text.strip()
+    if not dest:
+        await update.message.reply_text("مسیر فایل مقصد نمی‌تواند خالی باشد. لطفاً دوباره وارد کنید:")
+        return ASK_DEST
+    context.user_data["new_file"]["dest"] = dest
+    await update.message.reply_text("مرحله 4/5\nنام سرویس systemd (اگر ندارد 'none' وارد کنید):")
+    return ASK_SERVICE
+
+async def add_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    svc = update.message.text.strip()
+    if svc.lower() == "none":
+        svc = None
+    context.user_data["new_file"]["service"] = svc
+    await update.message.reply_text("مرحله 5/5\nسطح دسترسی فایل (مثلاً 755 یا 'none' اگر نمی‌خواهید تغییر دهید):")
+    return ASK_CHMOD
+
+async def add_chmod(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chmod = update.message.text.strip()
+    if chmod.lower() == "none":
+        chmod = None
+    context.user_data["new_file"]["chmod"] = chmod
+
+    new_file = context.user_data["new_file"]
+
+    # اضافه کردن به دیکشنری اصلی
+    FILES_AND_SERVICES[new_file["name"]] = {
+        "source": new_file["source"],
+        "dest": new_file["dest"],
+        "service": new_file["service"],
+        "chmod": new_file["chmod"],
+    }
+
+    keyboard = [
+        [InlineKeyboardButton(f"⭕️ آپدیت {name}", callback_data=f"update_{name}")]
+        for name in FILES_AND_SERVICES.keys()
+    ]
+    keyboard.append([InlineKeyboardButton("➕ افزودن فایل جدید", callback_data="add_new_file")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        f"✅ فایل جدید با موفقیت اضافه شد:\n\n"
+        f"نام: {new_file['name']}\n"
+        f"source: {new_file['source']}\n"
+        f"dest: {new_file['dest']}\n"
+        f"service: {new_file['service']}\n"
+        f"chmod: {new_file['chmod']}\n\n"
+        f"برای بازگشت به لیست دکمه‌ها، /start را ارسال کنید.",
+        reply_markup=reply_markup,
+    )
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ عملیات افزودن فایل جدید لغو شد.")
+    return ConversationHandler.END
+
+def main():
+    app = ApplicationBuilder().token("7666791827:AAH9o2QxhvT2QbzAHKjbWmDhaieDCiT1ldY").build()
+
+    conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(button, pattern="^add_new_file$")],
+        states={
+            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_name)],
+            ASK_SOURCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_source)],
+            ASK_DEST: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_dest)],
+            ASK_SERVICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service)],
+            ASK_CHMOD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_chmod)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        allow_reentry=True,
+    )
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button, pattern="^update_"))
+    app.add_handler(conv_handler)
+
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
+    
+#EOF
