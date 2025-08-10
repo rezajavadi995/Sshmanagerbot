@@ -2,7 +2,7 @@
 
 
 
-cat > /root/sshmanager/lock_user.py << 'EOF'
+#cat > /root/sshmanager/lock_user.py << 'EOF'
 #!/usr/bin/env python3
 #!/usr/bin/env python3
 import subprocess
@@ -102,11 +102,11 @@ if __name__ == "__main__":
     reason = sys.argv[2] if len(sys.argv) > 2 else "quota"
     lock_user(username, reason)
 
-EOF
+#EOF
 
 ##############
 
 #قابل اجراش کن: 
 
-chmod +x /root/sshmanager/lock_user.py
+#chmod +x /root/sshmanager/lock_user.py
 
