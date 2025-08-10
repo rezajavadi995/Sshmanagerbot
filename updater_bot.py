@@ -16,7 +16,6 @@ from telegram.ext import (
 ADMIN_ID = 8062924341
 REPO_PATH = "/root/sshmanager_repo"
 
-# مراحل مکالمه اضافه کردن فایل جدید و ویرایش/حذف
 ASK_NAME, ASK_SOURCE, ASK_DEST, ASK_SERVICE, ASK_CHMOD = range(5)
 EDIT_CHOOSE_FIELD, EDIT_NEW_VALUE, CONFIRM_DELETE = range(5, 8)
 
@@ -66,26 +65,41 @@ def fix_service_name(svc):
         svc += ".service"
     return svc
 
-# نمایش منوی اصلی دکمه‌ها
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    keyboard = [
-        [
-            InlineKeyboardButton(f"⭕️ آپدیت {name}", callback_data=f"update_{name}"),
-            InlineKeyboardButton("✏️ ویرایش", callback_data=f"edit_{name}"),
-            InlineKeyboardButton("❌ حذف", callback_data=f"delete_{name}")
-        ]
-        for name in FILES_AND_SERVICES.keys()
-    ]
+# منوی اصلی با دکمه‌های مرتب‌تر
+def build_main_keyboard():
+    keyboard = []
+    for filename in FILES_AND_SERVICES.keys():
+        keyboard.append([
+            InlineKeyboardButton(f"⭕️ آپدیت {filename}", callback_data=f"update_{filename}"),
+            InlineKeyboardButton("✏️ ویرایش", callback_data=f"edit_{filename}"),
+            InlineKeyboardButton("❌ حذف", callback_data=f"delete_{filename}")
+        ])
+    # دکمه افزودن فایل جدید در یک ردیف جدا
     keyboard.append([InlineKeyboardButton("➕ افزودن فایل جدید", callback_data="add_new_file")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "کدام فایل را می‌خواهید آپدیت، ویرایش یا حذف کنید؟",
-        reply_markup=reply_markup,
-    )
+    return InlineKeyboardMarkup(keyboard)
 
-# هندلر کلی دکمه‌ها
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    reply_markup = build_main_keyboard()
+    # اگر start از طریق دستور /start اومده
+    if update.message:
+        await update.message.reply_text(
+            "کدام فایل را می‌خواهید آپدیت، ویرایش یا حذف کنید؟",
+            reply_markup=reply_markup,
+        )
+    # اگر start از طریق دکمه main_menu اومده (callback query)
+    elif update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text(
+            "کدام فایل را می‌خواهید آپدیت، ویرایش یا حذف کنید؟",
+            reply_markup=reply_markup,
+        )
+    return ConversationHandler.END  # اتمام مکالمه در منوی اصلی
+
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -222,7 +236,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-# انتخاب فیلد برای ویرایش
 async def edit_choose_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -255,7 +268,6 @@ async def edit_choose_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-# دریافت مقدار جدید برای ویرایش
 async def edit_new_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_val = update.message.text.strip()
     filename = context.user_data.get("edit_file")
@@ -283,7 +295,6 @@ async def edit_new_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-# تایید حذف فایل
 async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().lower()
     filename = context.user_data.get("delete_file")
@@ -299,7 +310,6 @@ async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
-# مراحل اضافه کردن فایل جدید
 async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return ConversationHandler.END
@@ -350,7 +360,6 @@ async def add_chmod(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     new_file = context.user_data["new_file"]
 
-    # اضافه کردن به دیکشنری اصلی
     FILES_AND_SERVICES[new_file["name"]] = {
         "source": new_file["source"],
         "dest": new_file["dest"],
@@ -358,16 +367,7 @@ async def add_chmod(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "chmod": new_file["chmod"],
     }
 
-    keyboard = [
-        [
-            InlineKeyboardButton(f"⭕️ آپدیت {name}", callback_data=f"update_{name}"),
-            InlineKeyboardButton("✏️ ویرایش", callback_data=f"edit_{name}"),
-            InlineKeyboardButton("❌ حذف", callback_data=f"delete_{name}")
-        ]
-        for name in FILES_AND_SERVICES.keys()
-    ]
-    keyboard.append([InlineKeyboardButton("➕ افزودن فایل جدید", callback_data="add_new_file")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = build_main_keyboard()
 
     await update.message.reply_text(
         f"✅ فایل جدید با موفقیت اضافه شد:\n\n"
@@ -381,17 +381,18 @@ async def add_chmod(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     return ConversationHandler.END
 
-# لغو عملیات
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ عملیات لغو شد.")
     return ConversationHandler.END
 
 def main():
-    app = ApplicationBuilder().token("7666791827:AAH9o2QxhvT2QbzAHKjbWmDhaieDCiT1ldY").build()
+    app = ApplicationBuilder().token("YOUR_BOT_TOKEN").build()
 
-    # یک ConversationHandler واحد که همه مراحل و دکمه‌ها را پوشش می‌دهد
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start), CallbackQueryHandler(button, pattern="^(add_new_file|update_|edit_|delete_|main_menu)$")],
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(button, pattern="^(add_new_file|update_|edit_|delete_|main_menu)$")
+        ],
         states={
             ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_name)],
             ASK_SOURCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_source)],
@@ -409,7 +410,6 @@ def main():
     )
 
     app.add_handler(conv_handler)
-
     app.run_polling()
 
 if __name__ == "__main__":
