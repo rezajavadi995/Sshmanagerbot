@@ -3,7 +3,7 @@
 #بعد بهش با دستور زیر دسترسی اجرا بده: 
 #chmod +x /usr/local/bin/log_user_traffic.py
 
-cat > /usr/local/bin/log_user_traffic.py << 'EOF'
+#cat > /usr/local/bin/log_user_traffic.py << 'EOF'
 #!/usr/bin/env python3
 
 import subprocess
@@ -104,4 +104,4 @@ for line in lines:
         except Exception as e:
             with open(LOG_FILE, "a") as logf:
                 logf.write(f"[خطا در بررسی {username}] {str(e)}\n")
-EOF
+#EOF
