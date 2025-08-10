@@ -49,7 +49,7 @@ for user in users:
 
             if not is_blocked:
                 # استفاده از lock_user.py برای قفل حرفه‌ای
-                subprocess.run(["python3", "/root/sshmanager/lock_user.py", user])
+                subprocess.run(["python3", "/root/sshmanager/lock_user.py", user, "expire"])
                 notify_admin(user, exp.strftime("%Y-%m-%d"))
     except Exception:
         continue
