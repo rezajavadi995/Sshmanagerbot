@@ -13,7 +13,7 @@ import pwd
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
