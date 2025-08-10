@@ -745,10 +745,17 @@ async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("⚠️ اکانت قفل نیست.")
             return ConversationHandler.END
 
-        # Unlock the user
-        subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=True)
-        subprocess.run(["sudo", "passwd", "-u", username], check=True)
-        subprocess.run(["sudo", "usermod", "--expiredate", "''", username], check=True)
+        # 🔓 Unlock the user (فقط تونل، بدون لاگین مستقیم)
+        subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)  # شل بدون دسترسی
+        subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)       # مسیر هوم غیرواقعی
+        subprocess.run(["sudo", "passwd", "-u", username], check=False)                        # باز کردن پسورد
+        subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)                   # حذف تاریخ انقضا
+
+        # ✅ بازگرداندن دسترسی iptables
+        uid = subprocess.getoutput(f"id -u {username}").strip()
+        if uid.isdigit():
+            subprocess.run(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
+            subprocess.run(["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
 
         # Update the JSON file
         user_data["is_blocked"] = False
@@ -756,10 +763,17 @@ async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         with open(limit_file_path, "w") as f:
             json.dump(user_data, f, indent=4)
         
-        await update.message.reply_text(f"✅ اکانت `{username}` با موفقیت باز شد.", parse_mode="Markdown", reply_markup=main_menu_keyboard)
+        await update.message.reply_text(
+            f"✅ اکانت `{username}` با موفقیت باز شد.",
+            parse_mode="Markdown",
+            reply_markup=main_menu_keyboard
+        )
 
     except Exception as e:
-        await update.message.reply_text(f"❌ باز کردن اکانت با خطا مواجه شد:\n`{e}`", parse_mode="Markdown")
+        await update.message.reply_text(
+            f"❌ باز کردن اکانت با خطا مواجه شد:\n`{e}`",
+            parse_mode="Markdown"
+        )
 
     return ConversationHandler.END
 
