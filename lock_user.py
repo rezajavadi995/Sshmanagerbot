@@ -25,21 +25,19 @@ def send_telegram_message(text):
 
 def lock_user(username, reason="quota"):
     """
-    Lock a Linux user for SSH access/tunneling.
-    reason: "quota", "expire", or "manual" (defaults to "quota")
+    Lock a Linux user for SSH tunneling only (no shell).
+    reason: "quota", "expire", or "manual"
     """
     try:
-        # غیرفعال کردن شل (nologin) و قفل کردن پسورد
-        subprocess.run(["usermod", "-s", "/usr/sbin/nologin", username], check=True)
-        subprocess.run(["passwd", "-l", username], check=True)
-        
-        # قطع کردن اتصالات فعال SSH کاربر
-        subprocess.run(["pkill", "-u", username], check=False)
-        
-        # OLD (مشکل‌ساز) - تغییر تاریخ انقضا؛ به دلیل مشکلات سازگاری کامنت شده
-        # subprocess.run(["usermod", "--expiredate", "1", username], check=True)
+        # شل غیرفعال ولی اجازه تونل
+        subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=True)
+        subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=True)
+        subprocess.run(["sudo", "passwd", "-l", username], check=True)
 
-        # به‌روزرسانی فایل JSON کاربر برای جلوگیری از پیام‌های اشتباه
+        # قطع تمام نشست‌های فعال
+        subprocess.run(["sudo", "pkill", "-u", username], check=False)
+
+        # بروزرسانی فایل محدودیت
         limit_file_path = f"/etc/sshmanager/limits/{username}.json"
         if os.path.exists(limit_file_path):
             try:
@@ -48,50 +46,32 @@ def lock_user(username, reason="quota"):
             except Exception:
                 user_data = {}
 
-            # نگهداری فیلدهای قبلی (بدون حذف) و تنظیم مقادیر لازم
-            # (کلیدهای فعلی پروژه‌ات: used_bytes, total_bytes, limited, is_blocked ...)
-            user_data["used_bytes"] = 0
-            user_data["total_bytes"] = 0
-            user_data["limited"] = False
             user_data["is_blocked"] = True
-
-            # اگر دلیل قفل از قبل 'manual' باشد، آن را حفظ کن (ادمین دستی)
-            prev_reason = user_data.get("block_reason")
-            if prev_reason == "manual":
-                # حفظ دلیل دستی، حتی اگر این فراخوانی از اسکریپت خودکار باشد
-                pass
-            else:
-                # مقداردهی دلیل قفل بر اساس آرگومان ورودی (یا fallback به quota)
-                user_data["block_reason"] = reason if reason else "quota"
-
-            # (اختیاری) ذخیره زمان بلاک
             user_data["blocked_at"] = int(datetime.now().timestamp())
+            if user_data.get("block_reason") != "manual":
+                user_data["block_reason"] = reason
 
-            try:
-                with open(limit_file_path, "w") as f:
-                    json.dump(user_data, f, indent=4)
-            except Exception:
-                # در صورت خطا، تلاش می‌کنیم لاگ نکنیم اما بهتر است بررسی شود
-                pass
+            with open(limit_file_path, "w") as f:
+                json.dump(user_data, f, indent=4)
 
-        # حذف rule از iptables (اگر وجود داشته باشد)
+        # حذف rule از iptables
         uid = subprocess.getoutput(f"id -u {username}").strip()
-        if uid and uid.isdigit():
+        if uid.isdigit():
             subprocess.run(
-                ["iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                stderr=subprocess.DEVNULL,
+                ["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                stderr=subprocess.DEVNULL
             )
 
-        # پیام به تلگرام با توضیح دلیل (فارسی)
+        # پیام به ادمین
         reason_map = {
             "quota": "اتمام حجم",
             "expire": "اتمام تاریخ انقضا",
             "manual": "قفل دستی"
         }
-        reason_text = reason_map.get(reason, reason)
-        send_telegram_message(f"🔒 اکانت کاربر `{username}` به دلیل {reason_text} مسدود شد.")
+        send_telegram_message(f"🔒 اکانت `{username}` به دلیل {reason_map.get(reason, reason)} مسدود شد.")
+
     except Exception as e:
-        send_telegram_message(f"⚠️ خطا در مسدودسازی کاربر {username}: {e}")
+        send_telegram_message(f"⚠️ خطا در مسدودسازی `{username}`: {e}")
 
 if __name__ == "__main__":
     # اجازه دو حالت: python3 lock_user.py <username> [<reason>]
