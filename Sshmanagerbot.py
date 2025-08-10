@@ -657,61 +657,56 @@ async def start_lock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-
-async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#ادامه تابع جدید قفل کاربر
+async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # این تابع پیامِ یوزرنیم را پس از start_lock_user دریافت و پردازش می‌کند
     username = update.message.text.strip()
     try:
-        # Check if user exists and is not a system user
-        uid = int(subprocess.getoutput(f"id -u {username}").strip())
+        # بررسی وجود کاربر و جلوگیری از قفل کاربران سیستمی
+        uid_str = subprocess.getoutput(f"id -u {username}").strip()
+        if not uid_str.isdigit():
+            await update.message.reply_text("❌ کاربر یافت نشد.")
+            return ConversationHandler.END
+        uid = int(uid_str)
         if uid < 1000:
-            await update.message.reply_text("⛔️ این کاربر سیستمی است و نمی‌توان آن را باز کرد.")
+            await update.message.reply_text("⛔️ این کاربر سیستمی است و قفل نخواهد شد.")
             return ConversationHandler.END
     except Exception:
-        await update.message.reply_text("❌ کاربر یافت نشد.")
+        await update.message.reply_text("❌ خطا در بررسی کاربر.")
         return ConversationHandler.END
 
     try:
-        # Check if the user is a limited/blocked user
-        limit_file_path = f"/etc/sshmanager/limits/{username}.json"
-        is_blocked = False
-        if os.path.exists(limit_file_path):
-            with open(limit_file_path, "r") as f:
-                user_data = json.load(f)
-            is_blocked = user_data.get("is_blocked", False)
-
-        if not is_blocked:
-            await update.message.reply_text("⚠️ اکانت قفل نیست.")
+        # فراخوانی lock_user.py با دلیل manual
+        # توجه: اگر اسکریپت نیاز به sudo دارد، مطمئن شو اسکریپت به عنوان root اجرا می‌شود یا sudoers تنظیم شده
+        proc = subprocess.run(["python3", "/root/sshmanager/lock_user.py", username, "manual"], check=False)
+        if proc.returncode != 0:
+            await update.message.reply_text(f"❌ خطا در اجرای اسکریپت قفل (returncode={proc.returncode}).")
             return ConversationHandler.END
 
-        # 🔓 Unlock the user (فقط تونل، بدون لاگین مستقیم)
-        subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)  # شل بدون دسترسی
-        subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)       # مسیر هوم غیرواقعی
-        subprocess.run(["sudo", "passwd", "-u", username], check=False)                        # باز کردن پسورد
-        subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)                   # حذف تاریخ انقضا
+        # همگام‌سازی JSON (در صورتی که اسکریپت قبلاً آپدیت نکرده باشد)
+        limit_file_path = f"/etc/sshmanager/limits/{username}.json"
+        if os.path.exists(limit_file_path):
+            try:
+                with open(limit_file_path, "r") as f:
+                    user_data = json.load(f)
+            except Exception:
+                user_data = {}
 
-        # ✅ بازگرداندن دسترسی iptables
-        uid = subprocess.getoutput(f"id -u {username}").strip()
-        if uid.isdigit():
-            subprocess.run(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
-            subprocess.run(["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
+            user_data["is_blocked"] = True
+            user_data["block_reason"] = "manual"
+            # (اختیاری) ثبت زمان بلاک
+            from datetime import datetime
+            user_data["blocked_at"] = int(datetime.now().timestamp())
 
-        # Update the JSON file
-        user_data["is_blocked"] = False
-        user_data["block_reason"] = None
-        with open(limit_file_path, "w") as f:
-            json.dump(user_data, f, indent=4)
-        
-        await update.message.reply_text(
-            f"✅ اکانت `{username}` با موفقیت باز شد.",
-            parse_mode="Markdown",
-            reply_markup=main_menu_keyboard
-        )
+            try:
+                with open(limit_file_path, "w") as f:
+                    json.dump(user_data, f, indent=4)
+            except Exception:
+                pass
 
+        await update.message.reply_text(f"🔒 اکانت `{username}` با موفقیت قفل شد.", parse_mode="Markdown", reply_markup=main_menu_keyboard)
     except Exception as e:
-        await update.message.reply_text(
-            f"❌ باز کردن اکانت با خطا مواجه شد:\n`{e}`",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"❌ خطا هنگام قفل‌کردن اکانت:\n`{e}`", parse_mode="Markdown")
 
     return ConversationHandler.END
 #تابع جدید انلاک کردن کاربر
