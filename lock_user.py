@@ -1,7 +1,3 @@
-#اول دستور زیرو بزن تا پوشه ساخته بشه
-
-
-
 #cat > /root/sshmanager/lock_user.py << 'EOF'
 #!/usr/bin/env python3
 #!/usr/bin/env python3
