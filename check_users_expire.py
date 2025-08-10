@@ -1,6 +1,6 @@
 #فایل چک یوزر برای محدود سازی دسترسی کاربر بعد پیام هشدار از ربات  وقتی تاریخ اکانت کاربر تموم شد
 
-cat > /usr/local/bin/check_users_expire.py << 'EOF'
+#cat > /usr/local/bin/check_users_expire.py << 'EOF'
 #!/usr/bin/env python3
 import subprocess
 import datetime
@@ -55,52 +55,12 @@ for user in users:
         continue
 
         
-EOF
+#EOF
 
 ###################################
 
 #دسترسی اجرا بده بهش بعدش: 
-chmod +x /usr/local/bin/check_users_expire.py
-###################################
-
-
-#ساخت systemd Service و Timer
-cat > /etc/systemd/system/check-expire.service << 'EOF'
-[Unit]
-Description=Check and disable expired users
-
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/check_users_expire.py
-EOF
-
-
-###################################
-
-#مرحله ۳
-#ساخت تایمر
-cat > /etc/systemd/system/check-expire.timer << 'EOF'
-
-[Unit]
-Description=Run expire checker every 1 hour
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=1h
-
-[Install]
-WantedBy=timers.target
-EOF
-
-###################################
-
-#دسترسی اجرا بده بهش: 
-systemctl daemon-reexec
-systemctl daemon-reload
-systemctl enable --now check-expire.timer
-systemctl status check-expire.timer
-
-###################################
-#با این کار، هر ۱ ساعت چک می‌کنه و اگر کاربری منقضی شده باشه، اونو غیرفعال می‌کنه و بهت پیام می‌ده.
+#chmod +x /usr/local/bin/check_users_expire.py
+##################amu reza####################
 
 
