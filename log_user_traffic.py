@@ -59,7 +59,7 @@ for line in lines:
 
             # اگر حجم مصرفی بیشتر یا مساوی از حد بود → قطع دسترسی
             if limit > 0 and new_used >= limit:
-                subprocess.call(["python3", "/root/sshmanager/lock_user.py", username])
+                subprocess.call(["python3", "/root/sshmanager/lock_user.py", username, "quota"])
 
             #کامنت شده فعلا از فایل لاک یوزر پاور میگیره
             #اگه باگ داشت فعالش کن
