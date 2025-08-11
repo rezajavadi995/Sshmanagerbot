@@ -683,8 +683,8 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 j["block_reason"] = None
                 j["alert_sent"] = False
 
-            with open(limits_file, "w") as f:
-                json.dump(j, f, indent=4)
+            #new
+            atomic_write(limits_file, data)
 
             await query.message.reply_text(f"📶 حجم اکانت `{username}` به مقدار {gb}GB افزایش یافت.", parse_mode="Markdown")
             context.user_data["added_gb"] = added_gb
