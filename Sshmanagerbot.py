@@ -28,6 +28,9 @@ DOMAIN = "ssh.ultraspeed.shop"
 NOLOGIN_PATH = "/usr/sbin/nologin"
 FIX_IPTABLES_SCRIPT = "/root/fix-iptables.sh"
 
+#new
+LIMITS_DIR = "/etc/sshmanager/limits"
+
 # ensure directories
 Path("/etc/sshmanager/limits").mkdir(parents=True, exist_ok=True)
 Path("/etc/sshmanager/logs").mkdir(parents=True, exist_ok=True)
