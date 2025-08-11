@@ -27,14 +27,28 @@ def lock_user(username, reason="quota"):
     """
     try:
         # شل نال شده (nologin) — اجازه تونل ولی بدون ترمینال تعاملی
-        subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=True)
-        # هوم غیرواقعی برای امنیت
-        subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=True)
-        # قفل پسورد (برای جلوگیری از لاگین با پسورد)
-        subprocess.run(["sudo", "passwd", "-l", username], check=True)
+        rc, out, err = run_cmd(["sudo", "usermod", "-s", "/usr/sbin/nologin", username])
+        if rc != 0:
+            log.warning("usermod -s failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
+            send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود. جزئیات در لاگ.")
+            return False
 
-        # قطع نشست‌های فعال کاربر
-        subprocess.run(["sudo", "pkill", "-u", username], check=False)
+        # هوم غیرواقعی برای امنیت
+        rc, out, err = run_cmd(["sudo", "usermod", "-d", "/nonexistent", username])
+        if rc != 0:
+            log.warning("usermod -d failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
+            send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود. جزئیات در لاگ.")
+            return False
+
+        # قفل پسورد (برای جلوگیری از لاگین با پسورد)
+        rc, out, err = run_cmd(["sudo", "passwd", "-l", username])
+        if rc != 0:
+            log.warning("passwd -l failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
+            send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود. جزئیات در لاگ.")
+            return False
+
+        # قطع نشست‌های فعال کاربر (خطاها نادیده گرفته می‌شوند اما در صورت نیاز لاگ کن)
+        run_cmd(["sudo", "pkill", "-u", username])
 
         # بروزرسانی فایل محدودیت
         limit_file_path = os.path.join(LIMITS_DIR, f"{username}.json")
@@ -47,10 +61,8 @@ def lock_user(username, reason="quota"):
 
             user_data["is_blocked"] = True
             user_data["blocked_at"] = int(datetime.now().timestamp())
-            # اگر قبلاً دلیل بلاک دستی بوده حفظ شود
             if user_data.get("block_reason") != "manual":
                 user_data["block_reason"] = reason
-            # اگر alert_sent لازم است، آن را نیز ست می‌کنیم تا پیام‌های هشدار دیگر تکرار نشوند
             user_data["alert_sent"] = True
 
             try:
@@ -62,10 +74,7 @@ def lock_user(username, reason="quota"):
         # حذف rule از iptables (در صورت وجود)
         uid = subprocess.getoutput(f"id -u {username}").strip()
         if uid.isdigit():
-            subprocess.run(
-                ["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                stderr=subprocess.DEVNULL
-            )
+            run_cmd(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
 
         # پیام به ادمین
         reason_map = {
@@ -75,8 +84,12 @@ def lock_user(username, reason="quota"):
         }
         send_telegram_message(f"🔒 اکانت `{username}` به دلیل {reason_map.get(reason, reason)} مسدود شد.")
 
-    except Exception as e:
-        send_telegram_message(f"⚠️ خطا در مسدودسازی `{username}`: {e}")
+        return True
+
+    except Exception:
+        log.exception("Unexpected error in lock_user for %s", username)
+        send_telegram_message(f"⚠️ خطای داخلی هنگام مسدودسازی `{username}` — جزئیات در لاگ.")
+        return False
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
