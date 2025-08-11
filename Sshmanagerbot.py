@@ -284,7 +284,13 @@ def lock_user_account(username: str) -> bool:
 
         # remove iptables rule if exists
         try:
-            uid = subprocess.getoutput(f"id -u {username}").strip()
+            #uid = subprocess.getoutput(f"id -u {username}").strip()
+            rc, out, err = run_cmd(["id", "-u", username])
+            uid = out.strip() if rc == 0 else ""
+        if uid.isdigit():
+            subprocess.run(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
+            subprocess.run(["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
+
             subprocess.run(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
         except Exception:
             pass
