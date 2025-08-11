@@ -62,6 +62,29 @@ main_menu_keyboard = InlineKeyboardMarkup([
 ])
 
 #
+
+def run_cmd(cmd, timeout=30):
+    """
+    اجرای دستور سیستم با مدیریت خروجی و خطا
+    """
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
+    except subprocess.TimeoutExpired as e:
+        return 124, "", f"timeout: {e}"
+    except Exception as e:
+        log.exception("run_cmd unexpected error: %s", cmd)
+        return 1, "", str(e)
+
+def atomic_write(path, data):
+    """
+    ذخیره امن JSON
+    """
+    tmp = f"{path}.tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=4)
+    os.replace(tmp, path)
+
 #توابع جدید
 def safe_int(v, default=0):
     try:
