@@ -47,6 +47,104 @@ ASK_ANOTHER_RENEW = 9
 log = logging.getLogger("sshmanager")
 logging.basicConfig(level=logging.INFO)
 
+# 📌 تابع به‌روزرسانی مصرف لحظه‌ای (مثل log_user_traffic.py)
+def update_live_usage():
+    def parse_iptables_lines():
+        out = subprocess.getoutput("iptables -L SSH_USERS -v -n -x 2>/dev/null")
+        result = {}
+        for line in out.splitlines():
+            if not line or line.startswith(("Chain", "pkts", "target")):
+                continue
+            if "--uid-owner" not in line:
+                continue
+            parts = line.split()
+            try:
+                bytes_counter = int(parts[1])
+            except:
+                continue
+            try:
+                toks = line.split()
+                if "--uid-owner" in toks:
+                    uid = toks[toks.index("--uid-owner") + 1]
+                    result[uid] = bytes_counter
+            except:
+                continue
+        return result
+
+    ipt_map = parse_iptables_lines()
+    now_ts = int(datetime.now().timestamp())
+
+    for uid, current_bytes in ipt_map.items():
+        username = subprocess.getoutput(f"getent passwd {uid} | cut -d: -f1").strip()
+        if not username:
+            continue
+        limits_file = os.path.join(LIMITS_DIR, f"{username}.json")
+        if not os.path.exists(limits_file):
+            continue
+        try:
+            with open(limits_file, "r") as f:
+                data = json.load(f)
+        except:
+            data = {}
+        used_kb = int(data.get("used", 0))
+        last_bytes = int(data.get("last_iptables_bytes", 0))
+        delta_bytes = current_bytes - last_bytes
+        if delta_bytes < 0:
+            delta_bytes = current_bytes
+        delta_kb = int(delta_bytes / 1024)
+        if delta_kb > 0:
+            used_kb += delta_kb
+            data["used"] = used_kb
+        data["last_iptables_bytes"] = int(current_bytes)
+        data["last_checked"] = now_ts
+        with open(limits_file, "w") as fw:
+            json.dump(data, fw, indent=4)
+
+# 📌 تابع مرتب‌سازی بر اساس زمان ساخت اکانت
+def get_sorted_users():
+    users_info = subprocess.getoutput(
+        "getent passwd | awk -F: '$3 >= 1000 && $1 != \"nobody\" {print $1\":\"$3}'"
+    ).splitlines()
+    # بر اساس UID مرتب می‌کنیم (به عنوان تقریبی زمان ساخت)
+    users_sorted = sorted(users_info, key=lambda x: int(x.split(":")[1]))
+    return [u.split(":")[0] for u in users_sorted]
+
+# 📌 تابع ساخت صفحه گزارش
+def build_report_page(users, page):
+    start = page * 10
+    end = start + 10
+    page_users = users[start:end]
+    report_chunk = ""
+    for username in page_users:
+        limits_file = os.path.join(LIMITS_DIR, f"{username}.json")
+        limit_kb = 0
+        used_kb = 0
+        expire_ts = None
+        is_blocked = False
+        block_reason = None
+        if os.path.exists(limits_file):
+            try:
+                with open(limits_file, "r") as f:
+                    j = json.load(f)
+                limit_kb = int(j.get("limit", 0))
+                used_kb = int(j.get("used", 0))
+                expire_ts = j.get("expire_timestamp")
+                is_blocked = j.get("is_blocked", False)
+                block_reason = j.get("block_reason")
+            except:
+                pass
+        if limit_kb > 0:
+            percent = (used_kb / limit_kb) * 100
+            usage_str = f"{used_kb // 1024}MB / {limit_kb // 1024}MB ({percent:.1f}%)"
+        else:
+            usage_str = "♾ نامحدود"
+        expire_str = datetime.fromtimestamp(expire_ts).strftime("%Y-%m-%d") if expire_ts else "—"
+        status_str = "🔒" if is_blocked else "✅"
+        if is_blocked and block_reason:
+            status_str += f" ({block_reason})"
+        report_chunk += f"👤 `{username}`\n📊 مصرف: {usage_str}\n⏳ انقضا: {expire_str}\nوضعیت: {status_str}\n\n"
+    return report_chunk
+
 def random_str(length=10):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
 
