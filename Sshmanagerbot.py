@@ -323,7 +323,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fix_iptables()
     Path("/etc/sshmanager/limits").mkdir(parents=True, exist_ok=True)
 
-    keyboard = [
+    """keyboard = [
         [InlineKeyboardButton("✅ ساخت اکانت SSH", callback_data="create_user")],
         [InlineKeyboardButton("❌ حذف اکانت", callback_data="delete_user")],
         [
@@ -335,7 +335,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⏳ تمدید اکانت", callback_data="extend_user")],
         [InlineKeyboardButton("📊 گزارش کاربران", callback_data="report_users")]
         #[InlineKeyboardButton("📋 گزارش اکانت‌ها", callback_data="report_users")]
-    ]
+    ] """
 
     await reply("📲 پنل مدیریت SSH:", reply_markup=InlineKeyboardMarkup(keyboard))
     
