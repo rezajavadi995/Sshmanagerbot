@@ -1213,7 +1213,7 @@ def run_bot():
     app.add_handler(CallbackQueryHandler(lambda u, c: report_all_users(u, c), pattern="^report_users$"))
     
     # 3. MessageHandlerهای متنی را در انتها اضافه کنید تا با مکالمه تداخل نداشته باشند.
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))  # for lock flow
+    #app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))  # for lock flow
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))       # general
     
     app.run_polling()
