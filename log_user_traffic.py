@@ -4,19 +4,25 @@
 #chmod +x /usr/local/bin/log_user_traffic.py
 
 #cat > /usr/local/bin/log_user_traffic.py << 'EOF'
+
 #!/usr/bin/env python3
 import subprocess
 import json
 import os
 import requests
 from datetime import datetime
+from pathlib import Path
 
 # تنظیمات
 LIMITS_DIR = "/etc/sshmanager/limits"
 LOCK_SCRIPT = "/root/sshmanager/lock_user.py"
-BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"  
+BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
 ADMIN_ID = "8062924341"
 LOG_FILE = "/var/log/sshmanager-traffic.log"
+
+# اطمینان از وجود پوشه‌ها
+Path(LIMITS_DIR).mkdir(parents=True, exist_ok=True)
+Path(os.path.dirname(LOG_FILE)).mkdir(parents=True, exist_ok=True)
 
 def send_telegram_message(text):
     try:
@@ -45,19 +51,16 @@ def parse_iptables_lines():
         line = line.strip()
         if not line:
             continue
-        # ignore header lines
-        if line.startswith("Chain") or line.startswith("pkts") or line.startswith("target"):
+        if line.startswith(("Chain", "pkts", "target")):
             continue
-        # We only care lines that contain --uid-owner
         if "--uid-owner" not in line:
             continue
         parts = line.split()
-        # common iptables verbose: pkts bytes target prot opt in out source destination options...
-        # parts[0]=pkts, parts[1]=bytes
+        # try standard position
         try:
             bytes_counter = int(parts[1])
         except Exception:
-            # best-effort fallback: find first numeric token
+            # fallback: find first numeric token
             bytes_counter = None
             for tok in parts:
                 if tok.isdigit():
@@ -65,7 +68,7 @@ def parse_iptables_lines():
                     break
             if bytes_counter is None:
                 continue
-        # get uid after --uid-owner
+        # extract uid after --uid-owner
         try:
             toks = line.split()
             if "--uid-owner" in toks:
@@ -108,6 +111,20 @@ def main():
         limit_kb = int(data.get("limit", 0))         # stored in KB
         last_bytes = int(data.get("last_iptables_bytes", 0))  # stored in bytes
 
+        # ------ init safety: اگر برای اولین بار است، فقط مقداردهی اولیه کن ------
+        # شرط: اگر last_iptables_bytes==0 و last_checked وجود ندارد => init
+        if last_bytes == 0 and not data.get("last_checked"):
+            data["last_iptables_bytes"] = int(current_bytes)
+            data["last_checked"] = now_ts
+            # (نکته) مصرف فعلی را تغییر نمی‌دهیم، چون دادهٔ قبلی نداریم
+            try:
+                atomic_write(limits_file, data)
+            except Exception as e:
+                with open(LOG_FILE, "a") as lf:
+                    lf.write(f"{datetime.now().isoformat()} init write failed for {limits_file}: {e}\n")
+            continue
+        # ---------------------------------------------------------------------
+
         # compute delta (bytes)
         delta_bytes = current_bytes - last_bytes
         if delta_bytes < 0:
@@ -130,7 +147,6 @@ def main():
         # alert logic: only one-time alert at >=90%
         if limit_kb > 0:
             if percent >= 90 and not data.get("alert_sent", False):
-                # Preserve your original style of message (kept Persian)
                 send_telegram_message(
                     f"⚠️ کاربر `{username}` بیش از ۹۰٪ از حجم مجاز خود را مصرف کرده است.\n"
                     f"📊 میزان مصرف: {percent:.0f}%\n"
@@ -143,7 +159,6 @@ def main():
         # if used >= limit -> lock once
         if limit_kb > 0 and used_kb >= limit_kb and not data.get("is_blocked", False):
             try:
-                # call lock script with reason "quota"
                 subprocess.run(["python3", LOCK_SCRIPT, username, "quota"], check=False)
             except Exception as e:
                 with open(LOG_FILE, "a") as lf:
@@ -162,4 +177,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 #EOF
