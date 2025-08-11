@@ -1169,10 +1169,11 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # 📌 هندلر اصلی گزارش
 async def report_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update_live_usage()  # قبل از گزارش مصرف رو آپدیت می‌کنیم
+    reply = get_reply_func(update)
+    update_live_usage()
     users = get_sorted_users()
     if not users:
-        await update.message.reply_text("⚠️ هیچ کاربری یافت نشد.")
+        await reply("⚠️ هیچ کاربری یافت نشد.")
         return
     context.user_data["report_users"] = users
     context.user_data["report_page"] = 0
@@ -1180,7 +1181,8 @@ async def report_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = []
     if len(users) > 10:
         keyboard.append([InlineKeyboardButton("بعدی ▶", callback_data="report_next")])
-    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    await reply(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
 
 # 📌 کال‌بک هندلینگ صفحه‌بندی
 async def report_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
