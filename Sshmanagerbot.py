@@ -335,9 +335,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("⏳ تمدید اکانت", callback_data="extend_user")],
         [InlineKeyboardButton("📊 گزارش کاربران", callback_data="report_users")]
         #[InlineKeyboardButton("📋 گزارش اکانت‌ها", callback_data="report_users")]
-    ] """
+    ]
 
-    await reply("📲 پنل مدیریت SSH:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await reply("📲 پنل مدیریت SSH:", reply_markup=InlineKeyboardMarkup(keyboard)) """
+    await reply("📲 پنل مدیریت SSH:", reply_markup=main_menu_keyboard)
     
 
 
