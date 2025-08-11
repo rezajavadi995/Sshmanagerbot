@@ -48,57 +48,114 @@ log = logging.getLogger("sshmanager")
 logging.basicConfig(level=logging.INFO)
 
 # 📌 تابع به‌روزرسانی مصرف لحظه‌ای (مثل log_user_traffic.py)
+
 def update_live_usage():
+    """به‌روزرسانی مصرف لحظه‌ای کاربران از iptables"""
+
     def parse_iptables_lines():
+        """خوندن داده‌های مصرف از iptables"""
         out = subprocess.getoutput("iptables -L SSH_USERS -v -n -x 2>/dev/null")
         result = {}
         for line in out.splitlines():
+            line = line.strip()
             if not line or line.startswith(("Chain", "pkts", "target")):
                 continue
             if "--uid-owner" not in line:
                 continue
+
             parts = line.split()
             try:
                 bytes_counter = int(parts[1])
-            except:
-                continue
+            except ValueError:
+                # پیدا کردن اولین عدد معتبر
+                bytes_counter = next((int(tok) for tok in parts if tok.isdigit()), None)
+                if bytes_counter is None:
+                    continue
+
+            # گرفتن UID
             try:
                 toks = line.split()
                 if "--uid-owner" in toks:
                     uid = toks[toks.index("--uid-owner") + 1]
+                else:
+                    import re
+                    m = re.search(r"--uid-owner\s+(\d+)", line)
+                    uid = m.group(1) if m else None
+                if uid:
                     result[uid] = bytes_counter
-            except:
+            except Exception:
                 continue
         return result
 
+    # یکبار گرفتن همه UID → Username
+    def get_all_users_map():
+        users_map = {}
+        try:
+            result = subprocess.run(['getent', 'passwd'], capture_output=True, text=True, check=True)
+            for line in result.stdout.strip().splitlines():
+                parts = line.split(':')
+                if len(parts) >= 3:
+                    username = parts[0]
+                    uid = parts[2]
+                    users_map[uid] = username
+        except Exception:
+            pass
+        return users_map
+
     ipt_map = parse_iptables_lines()
+    if not ipt_map:
+        return
+
+    users_map = get_all_users_map()
     now_ts = int(datetime.now().timestamp())
 
     for uid, current_bytes in ipt_map.items():
-        username = subprocess.getoutput(f"getent passwd {uid} | cut -d: -f1").strip()
+        username = users_map.get(uid)
         if not username:
             continue
+
         limits_file = os.path.join(LIMITS_DIR, f"{username}.json")
         if not os.path.exists(limits_file):
             continue
+
         try:
             with open(limits_file, "r") as f:
                 data = json.load(f)
-        except:
+        except Exception:
             data = {}
+
         used_kb = int(data.get("used", 0))
         last_bytes = int(data.get("last_iptables_bytes", 0))
+
+        # مقداردهی اولیه
+        if last_bytes == 0 and not data.get("last_checked"):
+            data["last_iptables_bytes"] = int(current_bytes)
+            data["last_checked"] = now_ts
+            try:
+                with open(limits_file, "w") as fw:
+                    json.dump(data, fw, indent=4)
+            except Exception:
+                pass
+            continue
+
+        # محاسبه مصرف جدید
         delta_bytes = current_bytes - last_bytes
-        if delta_bytes < 0:
+        if delta_bytes < 0:  # ریست شمارنده
             delta_bytes = current_bytes
+
         delta_kb = int(delta_bytes / 1024)
         if delta_kb > 0:
             used_kb += delta_kb
             data["used"] = used_kb
+
         data["last_iptables_bytes"] = int(current_bytes)
         data["last_checked"] = now_ts
-        with open(limits_file, "w") as fw:
-            json.dump(data, fw, indent=4)
+
+        try:
+            with open(limits_file, "w") as fw:
+                json.dump(data, fw, indent=4)
+        except Exception:
+            pass
 
 # 📌 تابع مرتب‌سازی بر اساس زمان ساخت اکانت
 def get_sorted_users():
