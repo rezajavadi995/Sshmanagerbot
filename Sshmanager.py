@@ -71,12 +71,30 @@ def get_all_system_users():
 
 def lock_user_account(username: str) -> bool:
     try:
-        subprocess.run(["sudo", "passwd", "-l", username], check=True)
-        subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=True)
+        rc, out, err = run_cmd(["sudo", "usermod", "-s", NOLOGIN_PATH, username])
+        if rc != 0:
+            log.warning("usermod -s failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
+            send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود. جزئیات در لاگ.")
+            return False
+
+        rc, out, err = run_cmd(["sudo", "usermod", "-d", "/nonexistent", username])
+        if rc != 0:
+            log.warning("usermod -d failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
+            send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود. جزئیات در لاگ.")
+            return False
+
+        rc, out, err = run_cmd(["sudo", "passwd", "-l", username])
+        if rc != 0:
+            log.warning("passwd -l failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
+            send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود. جزئیات در لاگ.")
+            return False
+
         return True
-    except Exception as e:
-        print(f"[!] خطا در lock_user_account: {e}")
+    except Exception:
+        log.exception("Unexpected error in lock_user_account for %s", username)
+        send_telegram_message(f"⚠️ خطای داخلی هنگام قفل‌کردن `{username}` — جزئیات در لاگ.")
         return False
+
 
 def remove_user_iptables_rule(username):
     try:
