@@ -1208,7 +1208,7 @@ def run_bot():
     # 2. CallbackQueryHandlerهای غیر مکالمه‌ای را اضافه کنید.
     app.add_handler(CallbackQueryHandler(show_limited_users, pattern="^show_limited$"))
     app.add_handler(CallbackQueryHandler(show_blocked_users, pattern="^show_blocked$"))
-    app.add_handler(CallbackQueryHandler(report_all_users_callback, pattern="^report_users$"))
+    #app.add_handler(CallbackQueryHandler(report_all_users_callback, pattern="^report_users$"))
     
     # 3. MessageHandlerهای متنی را در انتها اضافه کنید تا با مکالمه تداخل نداشته باشند.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))  # for lock flow
