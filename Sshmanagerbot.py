@@ -47,6 +47,20 @@ ASK_ANOTHER_RENEW = 9
 log = logging.getLogger("sshmanager")
 logging.basicConfig(level=logging.INFO)
 
+#منو
+main_menu_keyboard = InlineKeyboardMarkup([
+    [InlineKeyboardButton("✅ ساخت اکانت SSH", callback_data="create_user")],
+    [InlineKeyboardButton("❌ حذف اکانت", callback_data="delete_user")],
+    [
+        InlineKeyboardButton("🔒 قفل‌کردن اکانت", callback_data="lock_user"),
+        InlineKeyboardButton("🔓 بازکردن اکانت", callback_data="unlock_user"),
+    ],
+    [InlineKeyboardButton("📊 کاربران حجمی", callback_data="show_limited")],
+    [InlineKeyboardButton("🚫 کاربران مسدود", callback_data="show_blocked")],
+    [InlineKeyboardButton("⏳ تمدید اکانت", callback_data="extend_user")],
+    [InlineKeyboardButton("🖥 گزارش کاربران", callback_data="report_users")],
+])
+
 # 📌 تابع به‌روزرسانی مصرف لحظه‌ای (مثل log_user_traffic.py)
 
 def update_live_usage():
