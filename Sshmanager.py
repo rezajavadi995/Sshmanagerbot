@@ -885,16 +885,6 @@ async def show_blocked_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.callback_query.message.reply_text(msg)
 
 
-#بررسی_و_تکمیل_مرحله_قفل_و_باز_کردن_اکانت_به_صورت_دستی
-
-#def lock_user_account(username):
-    #try:
-        #subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=True)
-        #subprocess.run(["sudo", "passwd", "-l", username], check=True)
-        #return True
-    #except:
-        #return False
-
 #هندل_تکس
 
     
