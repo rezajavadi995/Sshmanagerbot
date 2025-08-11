@@ -6,13 +6,17 @@ import requests
 import json
 import os
 from datetime import datetime
+import logging
 
+# تنظیمات
 BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
 ADMIN_ID = 8062924341
 LIMITS_DIR = "/etc/sshmanager/limits"
 LOG_FILE = "/var/log/sshmanager-traffic.log"
+NOLOGIN_PATH = "/usr/sbin/nologin"
 
-
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+log = logging.getLogger("lock_user")
 
 def run_cmd(cmd, timeout=30):
     try:
@@ -24,7 +28,6 @@ def run_cmd(cmd, timeout=30):
         log.exception("run_cmd unexpected error: %s", cmd)
         return 1, "", str(e)
 
-
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {"chat_id": ADMIN_ID, "text": text}
@@ -34,36 +37,20 @@ def send_telegram_message(text):
         pass
 
 def lock_user(username, reason="quota"):
-    """
-    Lock a Linux user for SSH tunneling only (no interactive shell).
-    reason: "quota", "expire", or "manual"
-    """
     try:
-        # شل نال شده (nologin) — اجازه تونل ولی بدون ترمینال تعاملی
-        rc, out, err = run_cmd(["sudo", "usermod", "-s", "/usr/sbin/nologin", username])
-        if rc != 0:
-            log.warning("usermod -s failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
-            send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود. جزئیات در لاگ.")
-            return False
+        for cmd in [
+            ["sudo", "usermod", "-s", NOLOGIN_PATH, username],
+            ["sudo", "usermod", "-d", "/nonexistent", username],
+            ["sudo", "passwd", "-l", username],
+        ]:
+            rc, out, err = run_cmd(cmd)
+            if rc != 0:
+                log.warning("Command failed %s: rc=%s err=%s out=%s", cmd, rc, err, out)
+                send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود.")
+                return False
 
-        # هوم غیرواقعی برای امنیت
-        rc, out, err = run_cmd(["sudo", "usermod", "-d", "/nonexistent", username])
-        if rc != 0:
-            log.warning("usermod -d failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
-            send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود. جزئیات در لاگ.")
-            return False
+        run_cmd(["sudo", "pkill", "-u", username])  # قطع نشست‌های فعال
 
-        # قفل پسورد (برای جلوگیری از لاگین با پسورد)
-        rc, out, err = run_cmd(["sudo", "passwd", "-l", username])
-        if rc != 0:
-            log.warning("passwd -l failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
-            send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود. جزئیات در لاگ.")
-            return False
-
-        # قطع نشست‌های فعال کاربر (خطاها نادیده گرفته می‌شوند اما در صورت نیاز لاگ کن)
-        run_cmd(["sudo", "pkill", "-u", username])
-
-        # بروزرسانی فایل محدودیت
         limit_file_path = os.path.join(LIMITS_DIR, f"{username}.json")
         if os.path.exists(limit_file_path):
             try:
@@ -71,32 +58,22 @@ def lock_user(username, reason="quota"):
                     user_data = json.load(f)
             except Exception:
                 user_data = {}
-
             user_data["is_blocked"] = True
             user_data["blocked_at"] = int(datetime.now().timestamp())
-            if user_data.get("block_reason") != "manual":
-                user_data["block_reason"] = reason
+            user_data["block_reason"] = reason
             user_data["alert_sent"] = True
-
             try:
                 with open(limit_file_path, "w") as f:
                     json.dump(user_data, f, indent=4)
             except Exception:
-                pass
+                log.warning("Failed to write limits file for %s", username)
 
-        # حذف rule از iptables (در صورت وجود)
         uid = subprocess.getoutput(f"id -u {username}").strip()
         if uid.isdigit():
             run_cmd(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
 
-        # پیام به ادمین
-        reason_map = {
-            "quota": "اتمام حجم",
-            "expire": "اتمام تاریخ انقضا",
-            "manual": "قفل دستی"
-        }
+        reason_map = {"quota": "اتمام حجم", "expire": "اتمام تاریخ انقضا", "manual": "قفل دستی"}
         send_telegram_message(f"🔒 اکانت `{username}` به دلیل {reason_map.get(reason, reason)} مسدود شد.")
-
         return True
 
     except Exception:
