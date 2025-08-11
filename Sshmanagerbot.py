@@ -1011,7 +1011,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     
 # ---------- reporting helper ----------
-async def report_all_users_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+"""async def report_all_users_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer("در حال آماده‌سازی گزارش...")
     if update.effective_user.id != ADMIN_ID:
@@ -1092,7 +1092,44 @@ async def report_all_users_callback(update: Update, context: ContextTypes.DEFAUL
     if len(report_text.splitlines()) > 2: # Checks if any user was found
         await query.message.reply_text(report_text, parse_mode="Markdown", reply_markup=main_menu_keyboard)
     else:
-        await query.message.reply_text("❌ هیچ کاربری برای گزارش یافت نشد.", reply_markup=main_menu_keyboard)
+        await query.message.reply_text("❌ هیچ کاربری برای گزارش یافت نشد.", reply_markup=main_menu_keyboard)"""
+
+
+
+# 📌 هندلر اصلی گزارش
+async def report_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_live_usage()  # قبل از گزارش مصرف رو آپدیت می‌کنیم
+    users = get_sorted_users()
+    if not users:
+        await update.message.reply_text("⚠️ هیچ کاربری یافت نشد.")
+        return
+    context.user_data["report_users"] = users
+    context.user_data["report_page"] = 0
+    text = build_report_page(users, 0)
+    keyboard = []
+    if len(users) > 10:
+        keyboard.append([InlineKeyboardButton("بعدی ▶", callback_data="report_next")])
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+
+# 📌 کال‌بک هندلینگ صفحه‌بندی
+async def report_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    users = context.user_data.get("report_users", [])
+    page = context.user_data.get("report_page", 0)
+    if query.data == "report_next":
+        page += 1
+    elif query.data == "report_prev":
+        page -= 1
+    page = max(0, min(page, (len(users) - 1) // 10))
+    context.user_data["report_page"] = page
+    text = build_report_page(users, page)
+    keyboard = []
+    if page > 0:
+        keyboard.append([InlineKeyboardButton("◀ قبلی", callback_data="report_prev")])
+    if (page + 1) * 10 < len(users):
+        keyboard.append([InlineKeyboardButton("بعدی ▶", callback_data="report_next")])
+    await query.edit_message_text(text=text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
 # Before def run_bot():
