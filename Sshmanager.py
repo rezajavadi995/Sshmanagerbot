@@ -933,26 +933,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_delete"] = False
         return
 
-# قفل‌کردن اکانت
-    #if context.user_data.get("awaiting_lock"):
-        #text = update.message.text.strip()
-        #try:
-            #success = lock_user_account(text)
-            #if success:
-                #await update.message.reply_text(f"🔒 اکانت `{text}` با موفقیت قفل شد.", parse_mode="Markdown")
-                #await context.bot.send_message(
-                    #chat_id=ADMIN_ID,
-                    #text=f"📛 اکانت کاربر `{text}` قفل شد.",
-                    #parse_mode="Markdown"
-                #)
-            #else:
-                #await update.message.reply_text("❌ خطا در قفل کردن یوزر.")
-        #except Exception as e:
-            #await update.message.reply_text(f"❌ خطا در قفل کردن یوزر:\n`{e}`", parse_mode="Markdown")
-        #context.user_data["awaiting_lock"] = False
-        #return
-
-
 
     #باز کردن قفل اکانت
     if context.user_data.get("awaiting_unlock"):
