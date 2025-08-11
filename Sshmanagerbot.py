@@ -262,13 +262,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 کاربران حجمی", callback_data="show_limited")],
         [InlineKeyboardButton("🚫 کاربران مسدود", callback_data="show_blocked")],
         [InlineKeyboardButton("⏳ تمدید اکانت", callback_data="extend_user")],
-        [InlineKeyboardButton("📋 گزارش اکانت‌ها", callback_data="report_users")]
+        [InlineKeyboardButton("📊 گزارش کاربران", callback_data="report_users")]
+        #[InlineKeyboardButton("📋 گزارش اکانت‌ها", callback_data="report_users")]
     ]
 
     await reply("📲 پنل مدیریت SSH:", reply_markup=InlineKeyboardMarkup(keyboard))
     
-    # NEW: از یک نقطه به جای فاصله خالی برای جلوگیری از خطای "Text must be non-empty" استفاده شد.
-    #await reply(".", reply_markup=ReplyKeyboardRemove())
 
 
 
