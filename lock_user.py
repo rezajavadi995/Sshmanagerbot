@@ -12,6 +12,19 @@ ADMIN_ID = 8062924341
 LIMITS_DIR = "/etc/sshmanager/limits"
 LOG_FILE = "/var/log/sshmanager-traffic.log"
 
+
+
+def run_cmd(cmd, timeout=30):
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
+    except subprocess.TimeoutExpired as e:
+        return 124, "", f"timeout: {e}"
+    except Exception as e:
+        log.exception("run_cmd unexpected error: %s", cmd)
+        return 1, "", str(e)
+
+
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {"chat_id": ADMIN_ID, "text": text}
