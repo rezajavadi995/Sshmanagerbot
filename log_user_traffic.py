@@ -14,8 +14,8 @@ import requests
 # مسیرها و تنظیمات
 LIMITS_DIR = "/etc/sshmanager/limits"
 LOCK_SCRIPT = "/root/sshmanager/lock_user.py"
-BOT_TOKEN = "توکن_ربات_اینجا"
-ADMIN_ID = "آیدی_ادمین_اینجا"
+BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
+ADMIN_ID = "8062924341"
 LOG_FILE = "/var/log/sshmanager-traffic.log"
 
 def send_telegram_message(text):
@@ -148,5 +148,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 #EOF
