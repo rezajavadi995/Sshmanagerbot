@@ -61,6 +61,29 @@ main_menu_keyboard = InlineKeyboardMarkup([
     [InlineKeyboardButton("🖥 گزارش کاربران", callback_data="report_users")],
 ])
 
+#
+#توابع جدید
+def safe_int(v, default=0):
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+def percent_used_kb(used_kb, limit_kb):
+    if limit_kb <= 0:
+        return 0.0
+    return (used_kb / limit_kb) * 100.0
+
+def kb_to_human(kb):
+    # kb -> string like "12.3 MB" or "1.23 GB"
+    kb = int(kb)
+    if kb >= 1024 * 1024:
+        return f"{kb / (1024*1024):.2f} GB"
+    if kb >= 1024:
+        return f"{kb / 1024:.1f} MB"
+    return f"{kb} KB"
+
+
 # 📌 تابع به‌روزرسانی مصرف لحظه‌ای (مثل log_user_traffic.py)
 
 def update_live_usage():
