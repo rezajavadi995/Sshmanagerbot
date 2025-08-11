@@ -289,9 +289,6 @@ def lock_user_account(username: str) -> bool:
             uid = out.strip() if rc == 0 else ""
         if uid.isdigit():
             subprocess.run(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
-            subprocess.run(["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
-
-            subprocess.run(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
         except Exception:
             pass
         return True
@@ -583,7 +580,9 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.reply_text("❌ اطلاعات تمدید ناقص است.")
         return ConversationHandler.END
 
-    uid = subprocess.getoutput(f"id -u {username}").strip()
+    #uid = subprocess.getoutput(f"id -u {username}").strip()
+    rc, out, err = run_cmd(["id", "-u", username])
+    uid = out.strip() if rc == 0 else ""
     limits_file = f"/etc/sshmanager/limits/{username}.json"
 
     # --- تمدید زمان ---
@@ -824,7 +823,9 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # set expiration
         subprocess.run(["sudo","chage","-E",expire_date.strftime("%Y-%m-%d"), username], check=True)
         # add iptables rule
-        uid = subprocess.getoutput(f"id -u {username}").strip()
+        #uid = subprocess.getoutput(f"id -u {username}").strip()
+        rc, out, err = run_cmd(["id", "-u", username])
+        uid = out.strip() if rc == 0 else ""
         subprocess.run(["sudo","iptables","-C","SSH_USERS","-m","owner","--uid-owner",uid,"-j","ACCEPT"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(["sudo","iptables","-A","SSH_USERS","-m","owner","--uid-owner",uid,"-j","ACCEPT"], check=False)
         # create limits file if limited
