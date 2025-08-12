@@ -275,43 +275,20 @@ def get_reply_func(update: Update):
     else:
         return lambda *args, **kwargs: None
 
-def lock_user_account(username: str) -> bool:
+def lock_user_account(username: str, reason: str = "quota") -> bool:
+    """
+    Perform a consistent lock for the given username by delegating to LOCK_SCRIPT.
+    Returns True on success.
+    """
     try:
-        subprocess.run(["sudo", "passwd", "-l", username], check=True)
-
-        rc, out, err = run_cmd(["sudo", "usermod", "-s", NOLOGIN_PATH, username])
+        # call the external script which already implements locking + json update + iptables delete
+        rc, out, err = run_cmd(["python3", LOCK_SCRIPT, username, reason])
         if rc != 0:
-            log.warning("usermod -s failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
-            send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — جزئیات در لاگ.")
+            log.warning("lock_user.py failed for %s rc=%s out=%s err=%s", username, rc, out, err)
             return False
-
-        # remove iptables rule if exists
-        rc, out, err = run_cmd(["id", "-u", username])
-        uid = out.strip() if rc == 0 else ""
-        if uid.isdigit():
-            run_cmd(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
-
-        # update limits JSON
-        limit_file = f"/etc/sshmanager/limits/{username}.json"
-        if os.path.exists(limit_file):
-            try:
-                with open(limit_file, "r") as f:
-                    data = json.load(f)
-            except Exception:
-                data = {}
-            data["is_blocked"] = True
-            data["block_reason"] = "manual"
-            data["blocked_at"] = int(datetime.now().timestamp())
-            try:
-                with open(limit_file, "w") as f:
-                    json.dump(data, f, indent=4)
-            except Exception:
-                log.exception("failed to update limit file for %s", username)
-
         return True
-
     except Exception:
-        log.exception("lock_user_account failed for %s", username)
+        log.exception("lock_user_account unexpected error for %s", username)
         return False
 
 def fix_iptables():
