@@ -8,7 +8,6 @@ import os
 from datetime import datetime
 import logging
 
-# تنظیمات -- اگر خواستی بعداً از env بخوان
 BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
 ADMIN_ID = 8062924341
 LIMITS_DIR = "/etc/sshmanager/limits"
@@ -50,19 +49,36 @@ def atomic_write(path, data):
             except:
                 pass
 
+def _is_benign_usermod_err(err_text):
+    """
+    خطاهایی که میتوان آن‌ها را بی‌خطر در نظر گرفت (مثل 'is currently used by process')
+    """
+    if not err_text:
+        return False
+    txt = err_text.lower()
+    benign_patterns = [
+        "currently used by process",
+        "is currently used by process",
+        "user .* is currently used by process",
+        "cannot lock the user record",
+    ]
+    for p in benign_patterns:
+        if p in txt:
+            return True
+    return False
+
 def lock_user(username, reason="quota"):
     """
     Lock a Linux user for SSH tunnel-only usage (no interactive login).
     reason: "quota", "expire", or "manual"
-    This function is resilient: تلاش می‌کند همه مراحل را انجام دهد و در هر حال
-    وضعیت JSON را به‌روز کند تا بات بتواند وضعیت را نمایش دهد.
-    Returns True if the user was marked blocked in limits file (or file created).
+    Returns True if limits file exists/was updated (logical success).
     """
     failures = []
+    warnings = []
     successes = []
 
     try:
-        # 1) Run main commands (try all; جمع‌آوری خطاها اما ادامه)
+        # 1) Run main commands
         cmds = [
             ["sudo", "usermod", "-s", NOLOGIN_PATH, username],
             ["sudo", "usermod", "-d", "/nonexistent", username],
@@ -73,17 +89,20 @@ def lock_user(username, reason="quota"):
             if rc == 0:
                 successes.append(" ".join(cmd))
             else:
-                # بعضی دستورات ممکنه خروجی غیرصفر داشته باشن (مثلاً passwd اگر کاربر وجود نداشته باشه)
-                failures.append(f"cmd failed: {' '.join(cmd)} | rc={rc} | err={err or out}")
+                # اگر خطا بی‌ضرر باشه، به warnings اضافه کن، وگرنه failures
+                if _is_benign_usermod_err(err or out):
+                    warnings.append(f"cmd warning: {' '.join(cmd)} | rc={rc} | msg={err or out}")
+                else:
+                    failures.append(f"cmd failed: {' '.join(cmd)} | rc={rc} | err={err or out}")
 
-        # 2) Kill active sessions (pkill returns 1 if no process matched — قابل چشم‌پوشی)
+        # 2) Kill active sessions (pkill)
         rc, out, err = run_cmd(["sudo", "pkill", "-u", username])
         if rc in (0, 1):
             successes.append("pkill")
         else:
             failures.append(f"pkill rc={rc} err={err}")
 
-        # 3) Update limits JSON (حتی اگر فایل وجود نداشته باشه، می‌سازیم و وضعیت را ثبت می‌کنیم)
+        # 3) Update limits JSON (ضروری برای بات)
         limit_file_path = os.path.join(LIMITS_DIR, f"{username}.json")
         try:
             if os.path.exists(limit_file_path):
@@ -100,53 +119,62 @@ def lock_user(username, reason="quota"):
             user_data["block_reason"] = reason
             user_data["alert_sent"] = True
 
-            # ensure limits dir exists
             os.makedirs(LIMITS_DIR, exist_ok=True)
             atomic_write(limit_file_path, user_data)
             successes.append("limits-file-updated")
         except Exception as e:
             failures.append(f"write limits failed: {e}")
 
-        # 4) Remove iptables rule if exists (اگر حذف نشد لاگ کن اما کار را ناتمام نگذار)
+        # 4) Remove iptables rule if exists
         rc, out, err = run_cmd(["id", "-u", username])
         uid = out.strip() if rc == 0 else ""
         if uid.isdigit():
-            # try to delete; if rule not present, ignore
             rc2, out2, err2 = run_cmd(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
             if rc2 == 0:
                 successes.append("iptables-removed")
             else:
-                # اگر خطا مربوط به نبودن rule بود، چشم‌پوشی کن
                 rc_check, ocheck, echeck = run_cmd(["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
                 if rc_check == 0:
-                    # rule وجود دارد اما حذف موفق نبود
                     failures.append(f"iptables -D failed rc={rc2} err={err2}")
                 else:
-                    # rule وجود ندارد — این مورد عادی است
                     successes.append("iptables-not-present")
         else:
-            # نتوانستیم uid را بگیریم — لاگ کن اما ادامه بده
-            failures.append("cannot get uid for user")
+            warnings.append("cannot get uid for user")
 
-        # 5) ارسال پیام تلگرام خلاصه‌ی وضعیت
+        # 5) Send friendly telegram summary
         reason_map = {"quota": "اتمام حجم", "expire": "اتمام تاریخ انقضا", "manual": "قفل دستی"}
+        header = f"🔒 تلاش برای قفل `{username}` — نتیجه:\n"
+        summary_lines = []
         if failures:
-            msg = f"⚠️ تلاش برای قفل کردن `{username}` انجام شد، اما خطا(ها) وجود دارد:\n"
-            for f in failures[:8]:
-                msg += f"- `{f}`\n"
-            if os.path.exists(limit_file_path):
-                msg += f"\n✅ وضعیت فایل محدودیت: به‌روزرسانی شد.\n"
-            else:
-                msg += f"\n❌ وضعیت فایل محدودیت: به‌روزرسانی نشد.\n"
-            msg += f"\n🔎 لطفاً لاگ را بررسی کنید: `{LOG_FILE}`"
-            send_telegram_message(msg)
+            summary_lines.append("❌ خطا(های مهم) وجود دارد:")
+            for f in failures:
+                summary_lines.append(f"- {f}")
+        if warnings and not failures:
+            summary_lines.append("⚠️ هشدار(ها) وجود دارد (عملیات اصلی انجام شده):")
+            for w in warnings:
+                summary_lines.append(f"- {w}")
+        if not failures and not warnings:
+            summary_lines.append(f"✅ اکانت `{username}` با موفقیت به دلیل *{reason_map.get(reason, reason)}* مسدود شد.")
+
+        # یک بلوک کدِ قابل کپی شامل جزئیات
+        details = ""
+        details += f"فایل محدودیت: {limit_file_path}\n"
+        details += f"وضعیت فایل limits: {'به‌روزرسانی شد' if os.path.exists(limit_file_path) else 'وجود ندارد'}\n"
+        details += f"موفقیت‌ها: {', '.join(successes) or '-'}\n"
+        if warnings:
+            details += f"هشدارها:\n" + "\n".join(warnings) + "\n"
+        if failures:
+            details += f"خطاها:\n" + "\n".join(failures) + "\n"
+        details += f"\nلاگ: {LOG_FILE}"
+
+        # ارسال پیام خلاصه + بلوک کد (برای کپی راحت)
+        send_telegram_message(header + "\n" + "\n".join(summary_lines) + "\n\n" + "```\n" + details + "\n```")
+
+        if failures:
             log.warning("lock_user partial failures for %s: %s", username, failures)
         else:
-            # موفقیت کامل
-            send_telegram_message(f"🔒 اکانت `{username}` به دلیل *{reason_map.get(reason, reason)}* مسدود شد.")
-            log.info("User %s locked (reason=%s) — successes: %s", username, reason, successes)
+            log.info("User %s locked (reason=%s) — successes: %s warnings: %s", username, reason, successes, warnings)
 
-        # اگر حداقل limits-file آپدیت شده باشه، برگشت True (بات می‌دونه کار منطقی انجام شده)
         return os.path.exists(limit_file_path)
 
     except Exception:
@@ -162,6 +190,7 @@ if __name__ == "__main__":
     reason = sys.argv[2] if len(sys.argv) > 2 else "quota"
     ok = lock_user(username, reason)
     sys.exit(0 if ok else 2)
+
 
 #EOF
 
