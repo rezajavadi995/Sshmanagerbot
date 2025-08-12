@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 import logging
 
-# تنظیمات
+# تنظیمات -- اگر خواستی بعداً از env بخوان
 BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
 ADMIN_ID = 8062924341
 LIMITS_DIR = "/etc/sshmanager/limits"
@@ -54,9 +54,15 @@ def lock_user(username, reason="quota"):
     """
     Lock a Linux user for SSH tunnel-only usage (no interactive login).
     reason: "quota", "expire", or "manual"
+    This function is resilient: تلاش می‌کند همه مراحل را انجام دهد و در هر حال
+    وضعیت JSON را به‌روز کند تا بات بتواند وضعیت را نمایش دهد.
+    Returns True if the user was marked blocked in limits file (or file created).
     """
+    failures = []
+    successes = []
+
     try:
-        # اجرای آیتم‌های اصلی (ترتیب مهم نیست زیاد)
+        # 1) Run main commands (try all; جمع‌آوری خطاها اما ادامه)
         cmds = [
             ["sudo", "usermod", "-s", NOLOGIN_PATH, username],
             ["sudo", "usermod", "-d", "/nonexistent", username],
@@ -64,42 +70,84 @@ def lock_user(username, reason="quota"):
         ]
         for cmd in cmds:
             rc, out, err = run_cmd(cmd)
-            if rc != 0:
-                # لاگ جزئیات؛ پیام خلاصه به تلگرام
-                log.warning("Command failed %s: rc=%s err=%s out=%s", cmd, rc, err, out)
-                send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود. جزئیات در لاگ.")
-                return False
+            if rc == 0:
+                successes.append(" ".join(cmd))
+            else:
+                # بعضی دستورات ممکنه خروجی غیرصفر داشته باشن (مثلاً passwd اگر کاربر وجود نداشته باشه)
+                failures.append(f"cmd failed: {' '.join(cmd)} | rc={rc} | err={err or out}")
 
-        # قطع نشستهای فعال
-        run_cmd(["sudo", "pkill", "-u", username])
+        # 2) Kill active sessions (pkill returns 1 if no process matched — قابل چشم‌پوشی)
+        rc, out, err = run_cmd(["sudo", "pkill", "-u", username])
+        if rc in (0, 1):
+            successes.append("pkill")
+        else:
+            failures.append(f"pkill rc={rc} err={err}")
 
-        # به‌روزرسانی فایل محدودیت
+        # 3) Update limits JSON (حتی اگر فایل وجود نداشته باشه، می‌سازیم و وضعیت را ثبت می‌کنیم)
         limit_file_path = os.path.join(LIMITS_DIR, f"{username}.json")
-        if os.path.exists(limit_file_path):
-            try:
-                with open(limit_file_path, "r") as f:
-                    user_data = json.load(f)
-            except Exception:
+        try:
+            if os.path.exists(limit_file_path):
+                try:
+                    with open(limit_file_path, "r") as f:
+                        user_data = json.load(f)
+                except Exception:
+                    user_data = {}
+            else:
                 user_data = {}
+
             user_data["is_blocked"] = True
             user_data["blocked_at"] = int(datetime.now().timestamp())
             user_data["block_reason"] = reason
             user_data["alert_sent"] = True
-            try:
-                atomic_write(limit_file_path, user_data)
-            except Exception:
-                log.warning("Failed to write limits file for %s", username)
 
-        # حذف rule iptables
+            # ensure limits dir exists
+            os.makedirs(LIMITS_DIR, exist_ok=True)
+            atomic_write(limit_file_path, user_data)
+            successes.append("limits-file-updated")
+        except Exception as e:
+            failures.append(f"write limits failed: {e}")
+
+        # 4) Remove iptables rule if exists (اگر حذف نشد لاگ کن اما کار را ناتمام نگذار)
         rc, out, err = run_cmd(["id", "-u", username])
         uid = out.strip() if rc == 0 else ""
         if uid.isdigit():
-            run_cmd(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
+            # try to delete; if rule not present, ignore
+            rc2, out2, err2 = run_cmd(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
+            if rc2 == 0:
+                successes.append("iptables-removed")
+            else:
+                # اگر خطا مربوط به نبودن rule بود، چشم‌پوشی کن
+                rc_check, ocheck, echeck = run_cmd(["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
+                if rc_check == 0:
+                    # rule وجود دارد اما حذف موفق نبود
+                    failures.append(f"iptables -D failed rc={rc2} err={err2}")
+                else:
+                    # rule وجود ندارد — این مورد عادی است
+                    successes.append("iptables-not-present")
+        else:
+            # نتوانستیم uid را بگیریم — لاگ کن اما ادامه بده
+            failures.append("cannot get uid for user")
 
+        # 5) ارسال پیام تلگرام خلاصه‌ی وضعیت
         reason_map = {"quota": "اتمام حجم", "expire": "اتمام تاریخ انقضا", "manual": "قفل دستی"}
-        send_telegram_message(f"🔒 اکانت `{username}` به دلیل *{reason_map.get(reason, reason)}* مسدود شد.")
-        log.info("User %s locked (reason=%s)", username, reason)
-        return True
+        if failures:
+            msg = f"⚠️ تلاش برای قفل کردن `{username}` انجام شد، اما خطا(ها) وجود دارد:\n"
+            for f in failures[:8]:
+                msg += f"- `{f}`\n"
+            if os.path.exists(limit_file_path):
+                msg += f"\n✅ وضعیت فایل محدودیت: به‌روزرسانی شد.\n"
+            else:
+                msg += f"\n❌ وضعیت فایل محدودیت: به‌روزرسانی نشد.\n"
+            msg += f"\n🔎 لطفاً لاگ را بررسی کنید: `{LOG_FILE}`"
+            send_telegram_message(msg)
+            log.warning("lock_user partial failures for %s: %s", username, failures)
+        else:
+            # موفقیت کامل
+            send_telegram_message(f"🔒 اکانت `{username}` به دلیل *{reason_map.get(reason, reason)}* مسدود شد.")
+            log.info("User %s locked (reason=%s) — successes: %s", username, reason, successes)
+
+        # اگر حداقل limits-file آپدیت شده باشه، برگشت True (بات می‌دونه کار منطقی انجام شده)
+        return os.path.exists(limit_file_path)
 
     except Exception:
         log.exception("Unexpected error in lock_user for %s", username)
