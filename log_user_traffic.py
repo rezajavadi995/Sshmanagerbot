@@ -36,16 +36,32 @@ def parse_iptables_lines():
     out = subprocess.getoutput("iptables -L SSH_USERS -v -n -x 2>/dev/null")
     result = {}
     for line in out.splitlines():
+        line = line.strip()
+        if not line or line.startswith(("Chain", "pkts", "target")):
+            continue
         if "--uid-owner" not in line:
             continue
+
         parts = line.split()
         try:
             bytes_counter = int(parts[1])
         except ValueError:
-            continue
+            # جستجوی اولین عدد معتبر
+            bytes_counter = next((int(tok) for tok in parts if tok.isdigit()), None)
+            if bytes_counter is None:
+                continue
+
+        # استخراج UID
         try:
-            uid = parts[parts.index("--uid-owner") + 1]
-            result[uid] = bytes_counter
+            toks = line.split()
+            if "--uid-owner" in toks:
+                uid = toks[toks.index("--uid-owner") + 1]
+            else:
+                import re
+                m = re.search(r"--uid-owner\s+(\d+)", line)
+                uid = m.group(1) if m else None
+            if uid:
+                result[uid] = bytes_counter
         except Exception:
             continue
     return result
@@ -76,6 +92,7 @@ def main():
         limit_kb = int(data.get("limit", 0))
         last_bytes = int(data.get("last_iptables_bytes", 0))
 
+        # calc delta
         delta_bytes = current_bytes - last_bytes
         if delta_bytes < 0:
             delta_bytes = current_bytes
@@ -83,13 +100,15 @@ def main():
 
         if delta_kb > 0:
             used_kb += delta_kb
-            data["used"] = used_kb
+            data["used"] = int(used_kb)
 
         data["last_iptables_bytes"] = int(current_bytes)
         data["last_checked"] = now_ts
 
+        # درصد مصرف با محافظت در برابر تقسیم بر صفر
         percent = (used_kb / limit_kb) * 100 if limit_kb > 0 else 0.0
 
+        # هشدار 90% یک‌بار
         if limit_kb > 0:
             if percent >= 90 and not data.get("alert_sent", False):
                 send_telegram_message(
@@ -101,8 +120,14 @@ def main():
             elif percent < 90 and data.get("alert_sent", False):
                 data["alert_sent"] = False
 
+        # مسدودسازی اگر به پایان رسیده
         if limit_kb > 0 and used_kb >= limit_kb and not data.get("is_blocked", False):
-            subprocess.run(["python3", LOCK_SCRIPT, username, "quota"], check=False)
+            # use the lock script (it updates json and iptables)
+            try:
+                subprocess.run(["python3", LOCK_SCRIPT, username, "quota"], check=False)
+            except Exception as e:
+                with open(LOG_FILE, "a") as lf:
+                    lf.write(f"{datetime.now().isoformat()} lock_user call failed for {username}: {e}\n")
             data["is_blocked"] = True
             data["block_reason"] = "quota"
             data["alert_sent"] = True
