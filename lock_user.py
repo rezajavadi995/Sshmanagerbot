@@ -30,27 +30,50 @@ def run_cmd(cmd, timeout=30):
 
 def send_telegram_message(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": ADMIN_ID, "text": text}
+    data = {"chat_id": ADMIN_ID, "text": text, "parse_mode":"Markdown"}
     try:
         requests.post(url, data=data, timeout=5)
-    except:
-        pass
+    except Exception as e:
+        log.warning("Failed to send telegram message: %s", e)
+
+def atomic_write(path, data):
+    tmp = f"{path}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=4)
+        os.replace(tmp, path)
+    except Exception:
+        log.exception("atomic write failed for %s", path)
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except:
+                pass
 
 def lock_user(username, reason="quota"):
+    """
+    Lock a Linux user for SSH tunnel-only usage (no interactive login).
+    reason: "quota", "expire", or "manual"
+    """
     try:
-        for cmd in [
+        # اجرای آیتم‌های اصلی (ترتیب مهم نیست زیاد)
+        cmds = [
             ["sudo", "usermod", "-s", NOLOGIN_PATH, username],
             ["sudo", "usermod", "-d", "/nonexistent", username],
             ["sudo", "passwd", "-l", username],
-        ]:
+        ]
+        for cmd in cmds:
             rc, out, err = run_cmd(cmd)
             if rc != 0:
+                # لاگ جزئیات؛ پیام خلاصه به تلگرام
                 log.warning("Command failed %s: rc=%s err=%s out=%s", cmd, rc, err, out)
-                send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود.")
+                send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — اجرای دستور ناموفق بود. جزئیات در لاگ.")
                 return False
 
-        run_cmd(["sudo", "pkill", "-u", username])  # قطع نشست‌های فعال
+        # قطع نشستهای فعال
+        run_cmd(["sudo", "pkill", "-u", username])
 
+        # به‌روزرسانی فایل محدودیت
         limit_file_path = os.path.join(LIMITS_DIR, f"{username}.json")
         if os.path.exists(limit_file_path):
             try:
@@ -63,17 +86,19 @@ def lock_user(username, reason="quota"):
             user_data["block_reason"] = reason
             user_data["alert_sent"] = True
             try:
-                with open(limit_file_path, "w") as f:
-                    json.dump(user_data, f, indent=4)
+                atomic_write(limit_file_path, user_data)
             except Exception:
                 log.warning("Failed to write limits file for %s", username)
 
-        uid = subprocess.getoutput(f"id -u {username}").strip()
+        # حذف rule iptables
+        rc, out, err = run_cmd(["id", "-u", username])
+        uid = out.strip() if rc == 0 else ""
         if uid.isdigit():
             run_cmd(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
 
         reason_map = {"quota": "اتمام حجم", "expire": "اتمام تاریخ انقضا", "manual": "قفل دستی"}
-        send_telegram_message(f"🔒 اکانت `{username}` به دلیل {reason_map.get(reason, reason)} مسدود شد.")
+        send_telegram_message(f"🔒 اکانت `{username}` به دلیل *{reason_map.get(reason, reason)}* مسدود شد.")
+        log.info("User %s locked (reason=%s)", username, reason)
         return True
 
     except Exception:
@@ -87,7 +112,8 @@ if __name__ == "__main__":
         sys.exit(1)
     username = sys.argv[1]
     reason = sys.argv[2] if len(sys.argv) > 2 else "quota"
-    lock_user(username, reason)
+    ok = lock_user(username, reason)
+    sys.exit(0 if ok else 2)
 
 #EOF
 
