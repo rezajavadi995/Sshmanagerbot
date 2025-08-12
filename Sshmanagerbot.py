@@ -1051,9 +1051,7 @@ async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         await update.callback_query.message.reply_text("📊 لیست کاربران حجمی:\n\n" + "\n".join(msg_lines), parse_mode="Markdown", reply_markup=main_menu_keyboard)
 
-
-
-#مشاهده کاربران مسدود 
+# مشاهده کاربران مسدود با صفحه‌بندی
 async def show_blocked_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.callback_query.answer()
@@ -1061,36 +1059,76 @@ async def show_blocked_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.callback_query.answer("در حال دریافت لیست کاربران مسدود شده...")
 
     blocked_users = []
-    limits_dir = "/etc/sshmanager/limits"
+    limits_dir = LIMITS_DIR
 
     if not os.path.exists(limits_dir):
         await update.callback_query.message.reply_text("❌ پوشه محدودیت پیدا نشد.")
         return
 
     for file in os.listdir(limits_dir):
-        if file.endswith(".json"):
-            file_path = os.path.join(limits_dir, file)
-            try:
-                with open(file_path, "r") as f:
-                    user_data = json.load(f)
-                
-                # Check the is_blocked flag
-                if user_data.get("is_blocked", False):
-                    username = file.replace(".json", "")
-                    reason = user_data.get("block_reason", "unknown")
-                    blocked_users.append(f"{username} ({reason})")
-            except (json.JSONDecodeError, FileNotFoundError):
+        if not file.endswith(".json"):
+            continue
+        file_path = os.path.join(limits_dir, file)
+        try:
+            with open(file_path, "r") as f:
+                user_data = json.load(f)
+            # فقط دیکشنری‌ها رو قبول می‌کنیم
+            if not isinstance(user_data, dict):
                 continue
+            if user_data.get("is_blocked", False):
+                username = file.replace(".json", "")
+                reason = user_data.get("block_reason", "نامشخص")
+                blocked_users.append(f"🔒 `{username}` ({reason})")
+        except Exception as e:
+            # خطا در یک فایل → ادامه بده
+            log.warning(f"Failed to read {file_path}: {e}")
+            continue
 
     if not blocked_users:
-        message = "❗️ هیچ کاربر مسدودی یافت نشد."
-    else:
-        message = "✅ لیست کاربران مسدودشده:\n\n"
-        for user in blocked_users:
-            message += f"🔒 {user}\n"
+        await update.callback_query.message.reply_text("❗️ هیچ کاربر مسدودی یافت نشد.", reply_markup=main_menu_keyboard)
+        return
 
-    # NEW: Removed reply_markup to prevent old keyboard from reappearing
-    await update.callback_query.message.reply_text(message, parse_mode="Markdown")
+    # ذخیره لیست و صفحه فعلی در context
+    context.user_data["blocked_users_list"] = blocked_users
+    context.user_data["blocked_users_page"] = 0
+
+    # ارسال صفحه اول
+    await send_blocked_users_page(update.callback_query.message, context)
+
+async def send_blocked_users_page(message, context: ContextTypes.DEFAULT_TYPE):
+    blocked_users = context.user_data.get("blocked_users_list", [])
+    page = context.user_data.get("blocked_users_page", 0)
+
+    per_page = 10
+    start = page * per_page
+    end = start + per_page
+    chunk = blocked_users[start:end]
+    total_pages = (len(blocked_users) - 1) // per_page + 1
+
+    text = f"✅ لیست کاربران مسدودشده (صفحه {page+1}/{total_pages}):\n\n" + "\n".join(chunk)
+
+    # ساخت دکمه‌های صفحه‌بندی
+    buttons = []
+    if page > 0:
+        buttons.append(InlineKeyboardButton("◀ قبلی", callback_data="blocked_prev"))
+    if end < len(blocked_users):
+        buttons.append(InlineKeyboardButton("بعدی ▶", callback_data="blocked_next"))
+
+    await message.reply_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([buttons]) if buttons else None)
+
+async def blocked_users_pagination_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "blocked_next":
+        context.user_data["blocked_users_page"] += 1
+    elif query.data == "blocked_prev":
+        context.user_data["blocked_users_page"] -= 1
+
+    # محدود کردن به بازه مجاز
+    context.user_data["blocked_users_page"] = max(0, min(context.user_data["blocked_users_page"], (len(context.user_data["blocked_users_list"]) - 1) // 10))
+
+    # نمایش صفحه جدید
+    await send_blocked_users_page(query.message, context)
 
 
 # unified text handler for awaiting actions or quick menu commands
@@ -1218,6 +1256,8 @@ def run_bot():
     # 2. CallbackQueryHandlerهای غیر مکالمه‌ای را اضافه کنید.
     app.add_handler(CallbackQueryHandler(show_limited_users, pattern="^show_limited$"))
     app.add_handler(CallbackQueryHandler(show_blocked_users, pattern="^show_blocked$"))
+    app.add_handler(CallbackQueryHandler(blocked_users_pagination_handler, pattern="^blocked_(next|prev)$"))
+
     #app.add_handler(CallbackQueryHandler(report_all_users_callback, pattern="^report_users$"))
     app.add_handler(CommandHandler("report_all_users", report_all_users))
     app.add_handler(CallbackQueryHandler(report_callback_handler, pattern="^report_(next|prev)$"))
