@@ -277,33 +277,41 @@ def get_reply_func(update: Update):
 def lock_user_account(username: str) -> bool:
     try:
         subprocess.run(["sudo", "passwd", "-l", username], check=True)
-        #subprocess.run(["sudo", "usermod", "-s", NOLOGIN_PATH, username], check=True)
-        #rc, out, err = run_cmd(["sudo", "usermod", "-s", "/usr/sbin/nologin", username])
+
         rc, out, err = run_cmd(["sudo", "usermod", "-s", NOLOGIN_PATH, username])
         if rc != 0:
             log.warning("usermod -s failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
             send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — جزئیات در لاگ.")
             return False
-        
-        
-        # New: kill all active sessions for the user
-        subprocess.run(["sudo", "pkill", "-u", username], check=False)
 
         # remove iptables rule if exists
-        try:
-            #uid = subprocess.getoutput(f"id -u {username}").strip()
-            rc, out, err = run_cmd(["id", "-u", username])
-            uid = out.strip() if rc == 0 else ""
+        rc, out, err = run_cmd(["id", "-u", username])
+        uid = out.strip() if rc == 0 else ""
         if uid.isdigit():
             run_cmd(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
-            #subprocess.run(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
-        except Exception:
-            pass
-        return True
-    except Exception as e:
-        log.exception("lock_user_account failed")
-        return False
 
+        # update limits JSON
+        limit_file = f"/etc/sshmanager/limits/{username}.json"
+        if os.path.exists(limit_file):
+            try:
+                with open(limit_file, "r") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+            data["is_blocked"] = True
+            data["block_reason"] = "manual"
+            data["blocked_at"] = int(datetime.now().timestamp())
+            try:
+                with open(limit_file, "w") as f:
+                    json.dump(data, f, indent=4)
+            except Exception:
+                log.exception("failed to update limit file for %s", username)
+
+        return True
+
+    except Exception:
+        log.exception("lock_user_account failed for %s", username)
+        return False
 
 def fix_iptables():
     try:
