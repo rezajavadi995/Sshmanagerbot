@@ -244,16 +244,21 @@ def build_report_page(users, page):
             try:
                 with open(limits_file, "r") as f:
                     j = json.load(f)
-                limit_kb = int(j.get("limit", 0))
-                used_kb = int(j.get("used", 0))
-                expire_ts = j.get("expire_timestamp")
-                is_blocked = j.get("is_blocked", False)
-                block_reason = j.get("block_reason")
-            except:
+                if isinstance(j, dict):
+                    limit_kb = safe_int(j.get("limit", 0))
+                    used_kb = safe_int(j.get("used", 0))
+                    expire_ts = j.get("expire_timestamp")
+                    is_blocked = bool(j.get("is_blocked", False))
+                    block_reason = j.get("block_reason")
+                else:
+                    # skip non-dict content
+                    limit_kb = 0
+                    used_kb = 0
+            except Exception:
                 pass
         if limit_kb > 0:
-            percent = (used_kb / limit_kb) * 100
-            usage_str = f"{used_kb // 1024}MB / {limit_kb // 1024}MB ({percent:.1f}%)"
+            percent = (used_kb / limit_kb) * 100 if limit_kb > 0 else 0
+            usage_str = f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)} ({percent:.1f}%)"
         else:
             usage_str = "♾ نامحدود"
         expire_str = datetime.fromtimestamp(expire_ts).strftime("%Y-%m-%d") if expire_ts else "—"
@@ -262,6 +267,7 @@ def build_report_page(users, page):
             status_str += f" ({block_reason})"
         report_chunk += f"👤 `{username}`\n📊 مصرف: {usage_str}\n⏳ انقضا: {expire_str}\nوضعیت: {status_str}\n\n"
     return report_chunk
+
 
 def random_str(length=10):
     return ''.join(random.choices(string.ascii_letters + string.digits, k=length))
