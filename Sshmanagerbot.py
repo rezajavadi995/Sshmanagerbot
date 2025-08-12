@@ -918,9 +918,7 @@ async def start_lock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.message.text.strip()
     try:
-        # بررسی وجود کاربر و جلوگیری از قفل کاربران سیستمی
-        rc, out, err = run_cmd(["id", "-u", username])
-        uid_str = out.strip() if rc == 0 else ""
+        uid_str = subprocess.getoutput(f"id -u {username}").strip()
         if not uid_str.isdigit():
             await update.message.reply_text("❌ کاربر یافت نشد.")
             return ConversationHandler.END
@@ -932,14 +930,13 @@ async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ خطا در بررسی کاربر.")
         return ConversationHandler.END
 
-    # فراخوانی اسکریپت لاک (همهٔ کارها در آن انجام می‌شود)
+    # call centralized script
     rc, out, err = run_cmd(["python3", LOCK_SCRIPT, username, "manual"])
     if rc != 0:
-        log.warning("lock_user.py returned rc=%s out=%s err=%s", rc, out, err)
         await update.message.reply_text("❌ خطا در اجرای عملیات قفل. جزئیات در لاگ.")
         return ConversationHandler.END
 
-    # همگام‌سازی JSON (در صورتی که اسکریپت قبلاً آپدیت نکرده باشد)
+    # Ensure JSON synced (script should have updated it, but we double-check)
     limit_file_path = f"/etc/sshmanager/limits/{username}.json"
     if os.path.exists(limit_file_path):
         try:
@@ -947,7 +944,6 @@ async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 user_data = json.load(f)
         except Exception:
             user_data = {}
-
         user_data["is_blocked"] = True
         user_data["block_reason"] = "manual"
         user_data["blocked_at"] = int(datetime.now().timestamp())
@@ -955,7 +951,7 @@ async def handle_lock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with open(limit_file_path, "w") as f:
                 json.dump(user_data, f, indent=4)
         except Exception:
-            log.exception("failed writing limits file for %s", username)
+            log.exception("failed write limits after manual lock %s", username)
 
     await update.message.reply_text(f"🔒 اکانت `{username}` با موفقیت قفل شد.", parse_mode="Markdown", reply_markup=main_menu_keyboard)
     return ConversationHandler.END
@@ -975,58 +971,52 @@ async def start_unlock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.message.text.strip()
     try:
-        rc, out, err = run_cmd(["id", "-u", username])
-        uid = out.strip() if rc == 0 else ""
-        if not uid.isdigit():
-            await update.message.reply_text("❌ کاربر یافت نشد.")
+        uid = int(subprocess.getoutput(f"id -u {username}").strip())
+        if uid < 1000:
+            await update.message.reply_text("⛔️ این کاربر سیستمی است و نمی‌توان آن را باز کرد.")
             return ConversationHandler.END
-        uid_val = uid
     except Exception:
-        await update.message.reply_text("❌ خطا در بررسی کاربر.")
+        await update.message.reply_text("❌ کاربر یافت نشد.")
         return ConversationHandler.END
 
     limit_file_path = f"/etc/sshmanager/limits/{username}.json"
     try:
-        # باز کردن حساب (passwd -u) و برداشتن تاریخ انقضا
-        rc, out, err = run_cmd(["sudo", "passwd", "-u", username])
-        if rc != 0:
-            log.warning("passwd -u failed for %s rc=%s err=%s", username, rc, err)
-            # ادامه میدیم ولی لاگ می‌کنیم
-        run_cmd(["sudo", "chage", "-E", "-1", username])
+        # اجرای دستورات آنلاک با run_cmd
+        run_cmd(["sudo", "passwd", "-u", username])   # unlock password
+        run_cmd(["sudo", "chage", "-E", "-1", username])  # remove expire
+        # keep shell as NOLOGIN (if your policy allows tunnel-only). If you want interactive shell use "/bin/bash"
+        run_cmd(["sudo", "usermod", "-s", NOLOGIN_PATH, username])
 
-        # اضافه کردن iptables rule (اگر وجود نداشت)
-        rc, out, err = run_cmd(["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid_val, "-j", "ACCEPT"])
-        if rc != 0:
-            rc2, o2, e2 = run_cmd(["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid_val, "-j", "ACCEPT"])
+        # ensure iptables rule exists (add if missing)
+        rc, out, err = run_cmd(["id", "-u", username])
+        uid_s = out.strip() if rc == 0 else ""
+        if uid_s.isdigit():
+            rc2, o2, e2 = run_cmd(["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid_s, "-j", "ACCEPT"])
             if rc2 != 0:
-                log.warning("Failed to add iptables rule for %s: rc=%s err=%s", username, rc2, e2)
+                run_cmd(["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid_s, "-j", "ACCEPT"])
 
-        # Update JSON
-        user_data = {}
+        # update JSON
         if os.path.exists(limit_file_path):
             try:
                 with open(limit_file_path, "r") as f:
                     user_data = json.load(f)
             except Exception:
                 user_data = {}
+            user_data["is_blocked"] = False
+            user_data["block_reason"] = None
+            user_data["alert_sent"] = False
+            user_data.pop("blocked_at", None)
+            try:
+                with open(limit_file_path, "w") as f:
+                    json.dump(user_data, f, indent=4)
+            except Exception:
+                log.exception("failed to write limit file during unlock for %s", username)
 
-        user_data["is_blocked"] = False
-        user_data["block_reason"] = None
-        user_data["alert_sent"] = False
-        try:
-            with open(limit_file_path, "w") as f:
-                json.dump(user_data, f, indent=4)
-        except Exception:
-            log.exception("failed to write limits file for %s", username)
-
-        await update.message.reply_text(
-            f"✅ اکانت `{username}` با موفقیت باز شد.",
-            parse_mode="Markdown",
-            reply_markup=main_menu_keyboard
-        )
+        await update.message.reply_text(f"✅ اکانت `{username}` با موفقیت باز شد.", parse_mode="Markdown", reply_markup=main_menu_keyboard)
     except Exception:
-        log.exception("handle_unlock_input failed for %s", username)
-        await update.message.reply_text("❌ باز کردن اکانت با خطا مواجه شد. جزئیات در لاگ.")
+        log.exception("unlock failed for %s", username)
+        await update.message.reply_text("❌ باز کردن اکانت با خطا مواجه شد. جزئیات در لاگ.", reply_markup=main_menu_keyboard)
+
     return ConversationHandler.END
 
 async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
