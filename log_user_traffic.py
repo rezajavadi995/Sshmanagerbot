@@ -46,12 +46,10 @@ def parse_iptables_lines():
         try:
             bytes_counter = int(parts[1])
         except ValueError:
-            # جستجوی اولین عدد معتبر
             bytes_counter = next((int(tok) for tok in parts if tok.isdigit()), None)
             if bytes_counter is None:
                 continue
 
-        # استخراج UID
         try:
             toks = line.split()
             if "--uid-owner" in toks:
@@ -85,6 +83,8 @@ def main():
         try:
             with open(limits_file, "r") as f:
                 data = json.load(f)
+            if not isinstance(data, dict):
+                continue
         except Exception:
             data = {}
 
@@ -92,7 +92,6 @@ def main():
         limit_kb = int(data.get("limit", 0))
         last_bytes = int(data.get("last_iptables_bytes", 0))
 
-        # calc delta
         delta_bytes = current_bytes - last_bytes
         if delta_bytes < 0:
             delta_bytes = current_bytes
@@ -105,10 +104,9 @@ def main():
         data["last_iptables_bytes"] = int(current_bytes)
         data["last_checked"] = now_ts
 
-        # درصد مصرف با محافظت در برابر تقسیم بر صفر
         percent = (used_kb / limit_kb) * 100 if limit_kb > 0 else 0.0
 
-        # هشدار 90% یک‌بار
+        # هشدار 90%
         if limit_kb > 0:
             if percent >= 90 and not data.get("alert_sent", False):
                 send_telegram_message(
@@ -120,9 +118,8 @@ def main():
             elif percent < 90 and data.get("alert_sent", False):
                 data["alert_sent"] = False
 
-        # مسدودسازی اگر به پایان رسیده
+        # مسدودسازی
         if limit_kb > 0 and used_kb >= limit_kb and not data.get("is_blocked", False):
-            # use the lock script (it updates json and iptables)
             try:
                 subprocess.run(["python3", LOCK_SCRIPT, username, "quota"], check=False)
             except Exception as e:
@@ -141,4 +138,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 #EOF
