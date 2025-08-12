@@ -295,7 +295,8 @@ def lock_user_account(username: str) -> bool:
             rc, out, err = run_cmd(["id", "-u", username])
             uid = out.strip() if rc == 0 else ""
         if uid.isdigit():
-            subprocess.run(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
+            run_cmd(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
+            #subprocess.run(["sudo", "iptables", "-D", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"], check=False)
         except Exception:
             pass
         return True
