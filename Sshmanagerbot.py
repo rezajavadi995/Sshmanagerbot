@@ -46,6 +46,7 @@ ASK_ANOTHER_RENEW = 9
 # ---------- utilities ----------
 log = logging.getLogger("sshmanager")
 logging.basicConfig(level=logging.INFO)
+LOCK_SCRIPT = "/root/sshmanager/lock_user.py"
 
 #منو
 main_menu_keyboard = InlineKeyboardMarkup([
