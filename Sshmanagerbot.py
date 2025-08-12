@@ -1023,47 +1023,35 @@ async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.callback_query.answer()
     if update.effective_user.id != ADMIN_ID:
         return
-    limits_dir = Path("/etc/sshmanager/limits")
+    limits_dir = Path(LIMITS_DIR)
     if not limits_dir.exists():
         await update.callback_query.message.reply_text("❌ پوشه محدودیت پیدا نشد.")
         return
-    msg = "📊 لیست کاربران حجمی:\n\n"
-    found = False
+    msg_lines = []
     for file in limits_dir.glob("*.json"):
         try:
             with open(file) as f:
                 data = json.load(f)
-            username = file.stem
             if data.get("type") != "limited":
                 continue
-            used = int(data.get("used",0))
-            limit = int(data.get("limit",1))
-            percent = (used / limit) * 100 if limit > 0 else 0
-            
-            # Formatting used and limit values to be more readable (e.g., KB to MB)
-            used_mb = used // 1024
-            limit_mb = limit // 1024
-
+            username = file.stem
+            used = safe_int(data.get("used", 0))
+            limit = safe_int(data.get("limit", 0))
+            pct = percent_used_kb(used, limit) if limit > 0 else 0.0
+            status_emoji = "🔴" if pct >= 100 else "🟠" if pct >= 90 else "🟢"
             expire_text = ""
             if data.get("expire_timestamp"):
                 days_left = (int(data["expire_timestamp"]) - int(datetime.now().timestamp())) // 86400
                 expire_text = f" | ⏳ {days_left} روز مانده" if days_left >= 0 else " | ⌛ منقضی‌شده"
-            
-            # Using appropriate emoji for the status
-            if percent >= 100: 
-                emoji = "🔴"
-            elif percent >= 90:
-                emoji = "🟠"
-            else: 
-                emoji = "🟢"
-
-            msg += f"{emoji} `{username}` → {used_mb}MB / {limit_mb}MB ({percent:.0f}٪){expire_text}\n"
-            found = True
+            msg_lines.append(f"{status_emoji} `{username}` → {kb_to_human(used)} / {kb_to_human(limit)} ({pct:.0f}%) {expire_text}")
         except Exception:
             log.exception("reading limit file failed")
-    if not found:
-        msg = "⚠️ هیچ کاربر حجمی پیدا نشد."
-    await update.callback_query.message.reply_text(msg, parse_mode="Markdown")
+    if not msg_lines:
+        await update.callback_query.message.reply_text("⚠️ هیچ کاربر حجمی پیدا نشد.", reply_markup=main_menu_keyboard)
+    else:
+        await update.callback_query.message.reply_text("📊 لیست کاربران حجمی:\n\n" + "\n".join(msg_lines), parse_mode="Markdown", reply_markup=main_menu_keyboard)
+
+
 
 #مشاهده کاربران مسدود 
 async def show_blocked_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
