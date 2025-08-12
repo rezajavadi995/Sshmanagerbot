@@ -278,7 +278,8 @@ def lock_user_account(username: str) -> bool:
     try:
         subprocess.run(["sudo", "passwd", "-l", username], check=True)
         #subprocess.run(["sudo", "usermod", "-s", NOLOGIN_PATH, username], check=True)
-        rc, out, err = run_cmd(["sudo", "usermod", "-s", "/usr/sbin/nologin", username])
+        #rc, out, err = run_cmd(["sudo", "usermod", "-s", "/usr/sbin/nologin", username])
+        rc, out, err = run_cmd(["sudo", "usermod", "-s", NOLOGIN_PATH, username])
         if rc != 0:
             log.warning("usermod -s failed for %s: rc=%s err=%s out=%s", username, rc, err, out)
             send_telegram_message(f"❌ خطا در قفل‌کردن `{username}` — جزئیات در لاگ.")
