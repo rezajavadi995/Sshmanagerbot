@@ -485,7 +485,7 @@ async def handle_extend_username(update: Update, context: ContextTypes.DEFAULT_T
     if update.effective_user.id != ADMIN_ID:
         return ConversationHandler.END
 
-    # آپدیت مصرف لحظه‌ای
+    # آپدیت مصرف لحظه‌ای قبل از نمایش
     try:
         update_live_usage()
     except Exception:
@@ -494,13 +494,13 @@ async def handle_extend_username(update: Update, context: ContextTypes.DEFAULT_T
     username = update.message.text.strip()
     context.user_data["renew_username"] = username
 
-    # بررسی وجود یوزر
+    # بررسی وجود کاربر
     result = subprocess.getoutput(f"id -u {username}")
     if not result.isdigit():
         await update.message.reply_text("❌ این یوزرنیم وجود ندارد.")
         return ConversationHandler.END
 
-    # وضعیت قفل
+    # وضعیت قفل بودن
     passwd_s = subprocess.getoutput(f"passwd -S {username} 2>/dev/null").split()
     locked = (len(passwd_s) > 1 and passwd_s[1] == "L")
     lock_status = "🚫 مسدود" if locked else "✅ فعال"
@@ -637,8 +637,11 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
 
 ###################
 
-                                
+
 async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return ConversationHandler.END
+
     query = update.callback_query
     await query.answer()
     username = context.user_data.get("renew_username", "")
@@ -654,7 +657,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     rc, out, err = run_cmd(["id", "-u", username])
     uid = out.strip() if rc == 0 else ""
-    limits_file = f"/etc/sshmanager/limits/{username}.json"
+    limits_file = f"{LIMITS_DIR}/{username}.json"
 
     # --- تمدید زمان ---
     if action == "renew_time" and data.startswith("add_days_"):
@@ -685,13 +688,9 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception:
             j = {}
 
-        # آنلاک خودکار اگر قفل موقت بوده
         if j.get("is_blocked", False) and j.get("block_reason") != "manual":
-            subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)
-            subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)
             subprocess.run(["sudo", "passwd", "-u", username], check=False)
             subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
-
             rc = subprocess.run(
                 ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                 stderr=subprocess.DEVNULL
@@ -701,13 +700,11 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                     ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                     check=False
                 )
-
             j["is_blocked"] = False
             j["block_reason"] = None
             j["alert_sent"] = False
 
         j["expire_timestamp"] = int(new_date.timestamp())
-        # ذخیره امن
         atomic_write(limits_file, j)
 
         await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
@@ -732,16 +729,12 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 j = {}
 
-            # هر مقدار GB معادلِ KB: GB * 1024 * 1024
             add_kb = gb * 1024 * 1024
-            j["limit"] = int(j.get("limit", 0)) + add_kb  # اضافه کردن به حجم قبلی
+            j["limit"] = int(j.get("limit", 0)) + add_kb
 
             if j.get("is_blocked", False) and j.get("block_reason") != "manual":
-                subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)
-                subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)
                 subprocess.run(["sudo", "passwd", "-u", username], check=False)
                 subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
-
                 rc = subprocess.run(
                     ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                     stderr=subprocess.DEVNULL
@@ -751,14 +744,11 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                         ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                         check=False
                     )
-
                 j["is_blocked"] = False
                 j["block_reason"] = None
                 j["alert_sent"] = False
 
-            # ذخیره امن با atomic_write — **اصلاح شد** (قبلاً data به جای j استفاده شده بود)
             atomic_write(limits_file, j)
-
             await query.message.reply_text(f"📶 حجم اکانت `{username}` به مقدار {gb}GB افزایش یافت.", parse_mode="Markdown")
             context.user_data["added_gb"] = added_gb
         else:
@@ -771,14 +761,8 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.reply_text("آیا می‌خواهید زمان هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
         return ASK_ANOTHER_RENEW
 
-    if added_gb and added_days:
-        await query.message.reply_text(
-            f"✅ تمدید انجام شد:\n👤 `{username}`\n🕒 +{added_days} روز\n📶 +{added_gb}GB",
-            parse_mode="Markdown"
-        )
-        return ConversationHandler.END
-
     return ConversationHandler.END
+
 
 
 #کد جدید ادامه کانورسیشن
