@@ -1,416 +1,585 @@
 #cat > /root/updater_bot.py << 'EOF'
+# /root/updater_bot.py
+# -*- coding: utf-8 -*-
+
+import asyncio
+import json
 import os
+import re
+import shlex
 import subprocess
-import traceback
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import time
+from datetime import datetime
+from glob import glob
+from pathlib import Path
+from typing import Dict, Optional, Tuple
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputFile,
+)
+from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
     ConversationHandler,
     MessageHandler,
-    filters,
     ContextTypes,
+    filters,
 )
 
-ADMIN_ID = 8062924341
+# ──────────────────────────────[ پیکربندی ]────────────────────────────────
+
+# ⚠️ توکن ربات را اینجا بگذار
+BOT_TOKEN = "7666791827:AAGeLPPlzRYb-tVke_nq6wIYtxz-fBtY9fg"
+
+# فقط ادمین اجازهٔ کار با ربات را دارد:
+ADMIN_ID = 8062924341  
+
+# مسیر کلون ریپو که فایل‌ها از آن Pull و کپی می‌شوند:
 REPO_PATH = "/root/sshmanager_repo"
 
-ASK_NAME, ASK_SOURCE, ASK_DEST, ASK_SERVICE, ASK_CHMOD = range(5)
-EDIT_CHOOSE_FIELD, EDIT_NEW_VALUE, CONFIRM_DELETE = range(5, 8)
+# محل ذخیرهٔ پیکربندی دکمه‌های سفارشی (برای پایداری)
+STATE_DIR = "/etc/updater-bot"
+ITEMS_JSON = f"{STATE_DIR}/items.json"
 
-FILES_AND_SERVICES = {
+# حد امن طول پیام تلگرام؛ اگر بیشتر شد، فایل txt آپلود می‌کنیم
+TELEGRAM_SAFE_LIMIT = 3500
+
+# نام سرویسی که «حدس» می‌زنیم برای همین ربات باشد (اگر دقیق نیست، Auto-Detect می‌شود)
+GUESSED_UPDATER_SERVICE = "updater-bot.service"
+
+# ──────────────────────────────[ آیتم‌های پیش‌فرض ]────────────────────────
+
+# ساختار هر آیتم:
+# name: {
+#    "source": "<path in repo or absolute>",
+#    "dest":   "<absolute dest on server>",
+#    "service": "<systemd service name or None or 'auto'>"
+# }
+DEFAULT_ITEMS: Dict[str, Dict] = {
     "Sshmanagerbot.py": {
         "source": f"{REPO_PATH}/Sshmanagerbot.py",
         "dest": "/root/sshmanagerbot.py",
         "service": "sshmanagerbot.service",
-        "chmod": None,
     },
     "check_user_usage.py": {
         "source": f"{REPO_PATH}/check_user_usage.py",
         "dest": "/usr/local/bin/check_user_usage.py",
         "service": None,
-        "chmod": None,
     },
     "check_users_expire.py": {
         "source": f"{REPO_PATH}/check_users_expire.py",
         "dest": "/usr/local/bin/check_users_expire.py",
         "service": None,
-        "chmod": None,
     },
     "lock_user.py": {
         "source": f"{REPO_PATH}/lock_user.py",
         "dest": "/root/sshmanager/lock_user.py",
         "service": None,
-        "chmod": None,
     },
     "log_user_traffic.py": {
         "source": f"{REPO_PATH}/log_user_traffic.py",
         "dest": "/usr/local/bin/log_user_traffic.py",
         "service": None,
-        "chmod": None,
+    },
+
+    # فایل‌های سیستمی که گفتی:
+    "log-user-traffic.service": {
+        "source": f"{REPO_PATH}/log-user-traffic.service",
+        "dest": "/etc/systemd/system/log-user-traffic.service",
+        "service": "log-user-traffic.service",
+    },
+    "check-expire.service": {
+        "source": f"{REPO_PATH}/check-expire.service",
+        "dest": "/etc/systemd/system/check-expire.service",
+        "service": "check-expire.service",
+    },
+
+    # خودِ ربات و سرویسش
+    "Updater_bot.py (self)": {
+        "source": f"{REPO_PATH}/Updater_bot.py",   # اسم فایل داخل گیت‌هاب طبق گفتهٔ شما
+        "dest": "/root/updater_bot.py",
+        "service": "auto",  # تلاش برای پیدا کردن سرویس درست
     },
 }
+
+# ──────────────────────────────[ ابزارها ]─────────────────────────────────
+
+def ensure_state_dir():
+    Path(STATE_DIR).mkdir(parents=True, exist_ok=True)
+
+def load_items() -> Dict[str, Dict]:
+    ensure_state_dir()
+    data = {}
+    if os.path.isfile(ITEMS_JSON):
+        try:
+            with open(ITEMS_JSON, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    # merge defaults (defaults override only if not already set)
+    merged = dict(DEFAULT_ITEMS)
+    merged.update(data)  # اگر کاربر قبلا سفارشی کرده، همان بماند
+    return merged
+
+def save_items(items: Dict[str, Dict]):
+    ensure_state_dir()
+    # فقط آیتم‌های اضافه‌شدهٔ کاربر را ذخیره کنیم (پیش‌فرض‌ها را لازم نیست)
+    user_items = {k: v for k, v in items.items() if k not in DEFAULT_ITEMS}
+    with open(ITEMS_JSON, "w", encoding="utf-8") as f:
+        json.dump(user_items, f, ensure_ascii=False, indent=2)
 
 def is_admin(user_id: int) -> bool:
     return user_id == ADMIN_ID
 
-def fix_service_name(svc):
-    if svc is None:
-        return None
-    svc = svc.strip()
-    if svc.lower() == "none" or svc == "":
-        return None
-    if not svc.endswith(".service"):
-        svc += ".service"
-    return svc
+def fmt_code(s: str) -> str:
+    # برای خوانایی بهتر
+    if not s:
+        return "—"
+    # از بلاک کد تلگرام استفاده می‌کنیم
+    return f"```\n{s}\n```"
 
-# منوی اصلی با دکمه‌های مرتب‌تر
-def build_main_keyboard():
-    keyboard = []
-    for filename in FILES_AND_SERVICES.keys():
-        keyboard.append([
-            InlineKeyboardButton(f"⭕️ آپدیت {filename}", callback_data=f"update_{filename}"),
-            InlineKeyboardButton("✏️ ویرایش", callback_data=f"edit_{filename}"),
-            InlineKeyboardButton("❌ حذف", callback_data=f"delete_{filename}")
-        ])
-    # دکمه افزودن فایل جدید در یک ردیف جدا
-    keyboard.append([InlineKeyboardButton("➕ افزودن فایل جدید", callback_data="add_new_file")])
-    return InlineKeyboardMarkup(keyboard)
+def normalize_service_name(name: Optional[str]) -> Optional[str]:
+    if not name:
+        return None
+    name = name.strip()
+    if not name:
+        return None
+    if not name.endswith(".service") and not name.endswith(".timer"):
+        name += ".service"
+    return name
+
+def detect_updater_service() -> Optional[str]:
+    """
+    اگر کاربر سرویس ربات آپدیتر را نداند، از داخل /etc/systemd/system سعی می‌کنیم حدس بزنیم.
+    """
+    candidates = []
+    for path in glob("/etc/systemd/system/*.service"):
+        base = os.path.basename(path).lower()
+        if "updater" in base and "bot" in base:
+            candidates.append(os.path.basename(path))
+    if candidates:
+        # اگر چندتا پیدا شد، اولی را می‌گیریم
+        return candidates[0]
+    # اگر چیزی پیدا نشد، حدس از پیش تعیین‌شده
+    return GUESSED_UPDATER_SERVICE
+
+def set_executable(path: str):
+    try:
+        st = os.stat(path)
+        os.chmod(path, st.st_mode | 0o111)
+    except Exception:
+        pass
+
+def run_cmd(cmd: str, timeout: int = 120) -> Tuple[int, str]:
+    """
+    دستور شِل را اجرا کرده و (exit_code, combined_output) را برمی‌گرداند.
+    """
+    try:
+        completed = subprocess.run(
+            cmd,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            text=True,
+        )
+        return completed.returncode, completed.stdout
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or "") + "\n\n[Timeout]"
+        return 124, out
+    except Exception as e:
+        return 1, f"Exception: {e}"
+
+async def reply_log(update: Update, text: str, filename_prefix: str = "log"):
+    """
+    اگر متن طولانی باشد، به‌صورت فایل می‌فرستد؛ وگرنه به‌صورت پیام.
+    """
+    if len(text) > TELEGRAM_SAFE_LIMIT:
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = f"/tmp/{filename_prefix}-{ts}.txt"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        await update.effective_message.reply_document(
+            document=InputFile(path),
+            caption="📄 خروجی طولانی بود؛ به‌صورت فایل ارسال شد."
+        )
+    else:
+        await update.effective_message.reply_text(fmt_code(text), parse_mode=ParseMode.MARKDOWN_V2)
+
+async def edit_log(query, text: str, filename_prefix: str = "log"):
+    """
+    مشابه reply_log اما برای ویرایش پیام دکمه.
+    """
+    if len(text) > TELEGRAM_SAFE_LIMIT:
+        await query.edit_message_text("📄 خروجی طولانی بود؛ به‌صورت فایل جداگانه ارسال می‌شود...")
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = f"/tmp/{filename_prefix}-{ts}.txt"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        await query.message.reply_document(
+            document=InputFile(path),
+            caption="📄 خروجی کامل عملیات"
+        )
+    else:
+        await query.edit_message_text(fmt_code(text), parse_mode=ParseMode.MARKDOWN_V2)
+
+def build_keyboard(items: Dict[str, Dict]) -> InlineKeyboardMarkup:
+    buttons = []
+    for name in items.keys():
+        buttons.append([InlineKeyboardButton(f"⭕️ آپدیت {name}", callback_data=f"update::{name}")])
+    # کنترل‌ها
+    controls = [
+        [InlineKeyboardButton("➕ ساخت دکمهٔ جدید", callback_data="control::add")],
+        [InlineKeyboardButton("📜 لیست آیتم‌ها", callback_data="control::list")],
+        [InlineKeyboardButton("🔄 Git Pull دستی", callback_data="control::pull")],
+    ]
+    return InlineKeyboardMarkup(buttons + controls)
+
+# ──────────────────────────────[ هندلرهای اصلی ]───────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
+    if not is_admin(update.effective_user.id):
+        return
+    items = load_items()
+    await update.message.reply_text(
+        "کدام فایل/سرویس را می‌خواهید آپدیت کنید؟",
+        reply_markup=build_keyboard(items),
+    )
+
+async def git_pull(update_or_query, is_query=False):
+    cmd = f"git -C {shlex.quote(REPO_PATH)} pull --ff-only"
+    code, out = run_cmd(cmd, timeout=180)
+    text = f"🏷 دستور: {cmd}\nخروجی:\n{out}\n(exit={code})"
+    if is_query:
+        await edit_log(update_or_query, text, "git-pull")
+    else:
+        await reply_log(update_or_query, text, "git-pull")
+
+def safe_copy(src: str, dst: str) -> Tuple[int, str]:
+    """
+    فایل را به‌صورت امن کپی می‌کند (با ایجاد دایرکتوری‌های مقصد).
+    """
+    dst_dir = os.path.dirname(dst)
+    Path(dst_dir).mkdir(parents=True, exist_ok=True)
+    cmd = f"/bin/cp -f {shlex.quote(src)} {shlex.quote(dst)}"
+    return run_cmd(cmd)
+
+def systemd_reload_enable_restart(service: str) -> Tuple[int, str]:
+    """
+    systemctl daemon-reload; enable; restart
+    همچنین اگر .timer متناظر دارد، آن را نیز enable/start می‌کند.
+    """
+    log_all = []
+    # daemon-reload
+    c, o = run_cmd("systemctl daemon-reload")
+    log_all.append(f"$ systemctl daemon-reload\n{o}(exit={c})\n")
+
+    # normalize service/timer
+    svc = normalize_service_name(service)
+    if svc:
+        c, o = run_cmd(f"systemctl enable {shlex.quote(svc)}")
+        log_all.append(f"$ systemctl enable {svc}\n{o}(exit={c})\n")
+        c, o = run_cmd(f"systemctl restart {shlex.quote(svc)}")
+        log_all.append(f"$ systemctl restart {svc}\n{o}(exit={c})\n")
+
+        # اگر .timer دارد
+        timer_name = re.sub(r"\.service$", ".timer", svc)
+        if timer_name != svc:
+            # اگر فایل تایمر وجود دارد، enable/start شود
+            timer_path = f"/etc/systemd/system/{timer_name}"
+            if os.path.exists(timer_path):
+                c, o = run_cmd(f"systemctl enable {shlex.quote(timer_name)}")
+                log_all.append(f"$ systemctl enable {timer_name}\n{o}(exit={c})\n")
+                c, o = run_cmd(f"systemctl start {shlex.quote(timer_name)}")
+                log_all.append(f"$ systemctl start {timer_name}\n{o}(exit={c})\n")
+    return 0, "\n".join(log_all)
+
+async def do_update(query, name: str):
+    items = load_items()
+    info = items.get(name)
+    if not info:
+        await query.edit_message_text("❌ آیتم موردنظر پیدا نشد.")
         return
 
-    reply_markup = build_main_keyboard()
-    # اگر start از طریق دستور /start اومده
-    if update.message:
-        await update.message.reply_text(
-            "کدام فایل را می‌خواهید آپدیت، ویرایش یا حذف کنید؟",
-            reply_markup=reply_markup,
-        )
-    # اگر start از طریق دکمه main_menu اومده (callback query)
-    elif update.callback_query:
-        query = update.callback_query
-        await query.answer()
-        await query.edit_message_text(
-            "کدام فایل را می‌خواهید آپدیت، ویرایش یا حذف کنید؟",
-            reply_markup=reply_markup,
-        )
-    return ConversationHandler.END  # اتمام مکالمه در منوی اصلی
+    src = info.get("source")
+    dst = info.get("dest")
+    svc = info.get("service")
+
+    logs = []
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logs.append(f"⏱ زمان: {ts}")
+    logs.append(f"🔧 آیتم: {name}")
+    logs.append(f"📦 منبع: {src}")
+    logs.append(f"📍 مقصد: {dst}")
+    logs.append(f"🧩 سرویس: {svc}")
+
+    # 1) git pull
+    c, o = run_cmd(f"git -C {shlex.quote(REPO_PATH)} pull --ff-only", timeout=180)
+    logs.append(f"$ git -C {REPO_PATH} pull --ff-only\n{o}(exit={c})\n")
+    if c != 0:
+        await edit_log(query, "\n".join(logs), f"update-{name}")
+        return
+
+    # 2) کپی فایل
+    if not os.path.exists(src):
+        logs.append(f"❌ منبع وجود ندارد: {src}")
+        await edit_log(query, "\n".join(logs), f"update-{name}")
+        return
+
+    c, o = safe_copy(src, dst)
+    logs.append(f"$ cp -f {src} {dst}\n{o}(exit={c})\n")
+    if c != 0:
+        await edit_log(query, "\n".join(logs), f"update-{name}")
+        return
+
+    # 3) اگر فایل اجرایی است (py/sh)، پرمیشن اجرا بده
+    if dst.endswith(".py") or dst.endswith(".sh"):
+        try:
+            set_executable(dst)
+            logs.append(f"✅ مجوز اجرا به {dst} داده شد.")
+        except Exception as e:
+            logs.append(f"⚠️ خطا در chmod: {e}")
+
+    # 4) اگر سرویس دارد → reload/enable/restart (+timer)
+    effective_service = None
+    if svc == "auto":
+        effective_service = detect_updater_service()
+        logs.append(f"🔎 سرویس تشخیص‌داده‌شده: {effective_service}")
+    elif svc:
+        effective_service = normalize_service_name(svc)
+
+    if effective_service:
+        c, o = systemd_reload_enable_restart(effective_service)
+        logs.append(o)
+
+    # 5) پایان
+    logs.append(f"✅ عملیاتِ آپدیت «{name}» به پایان رسید.")
+    await edit_log(query, "\n".join(logs), f"update-{name}")
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user_id = query.from_user.id
-    if not is_admin(user_id):
+    if not is_admin(query.from_user.id):
         await query.edit_message_text("شما ادمین نیستید.")
-        return ConversationHandler.END
+        return
 
-    data = query.data
+    data = query.data or ""
+    if data.startswith("update::"):
+        name = data.split("::", 1)[1]
+        await query.edit_message_text(f"⏳ در حال آپدیت «{name}» ...")
+        await do_update(query, name)
+        return
+    if data == "control::pull":
+        await git_pull(query, is_query=True)
+        return
+    if data == "control::list":
+        items = load_items()
+        lines = []
+        for k, v in items.items():
+            lines.append(f"- {k}  | source: {v.get('source')}  | dest: {v.get('dest')}  | service: {v.get('service')}")
+        text = "📜 لیست آیتم‌ها:\n" + "\n".join(lines)
+        await edit_log(query, text, "items")
+        return
+    if data == "control::add":
+        # شروع ویزارد ساخت دکمه
+        await start_add_wizard(query, context)
+        return
 
-    # افزودن فایل جدید
-    if data == "add_new_file":
-        await query.edit_message_text("مرحله 1/5\nلطفاً نام فایل را وارد کنید (مثلاً my_script.py):")
-        return ASK_NAME
+# ──────────────────────────────[ ویزارد ساخت دکمه ]────────────────────────
 
-    # آپدیت فایل
-    if data.startswith("update_"):
-        filename = data[len("update_"):]
-        info = FILES_AND_SERVICES.get(filename)
-        if not info:
-            await query.edit_message_text("فایل مورد نظر یافت نشد.")
-            return ConversationHandler.END
-        try:
-            git_pull = subprocess.run(
-                ["git", "-C", REPO_PATH, "pull"], capture_output=True, text=True
-            )
-            if git_pull.returncode != 0:
-                await query.edit_message_text(f"❌ خطا در دریافت آخرین تغییرات از گیت:\n{git_pull.stderr}")
-                return ConversationHandler.END
+ADD_NAME, ADD_SOURCE, ADD_DEST, ADD_SERVICE, ADD_CONFIRM = range(5)
 
-            cp_cmd = subprocess.run(
-                ["cp", info["source"], info["dest"]], capture_output=True, text=True
-            )
-            if cp_cmd.returncode != 0:
-                await query.edit_message_text(f"❌ خطا در کپی فایل:\n{cp_cmd.stderr}")
-                return ConversationHandler.END
-
-            chmod_output = ""
-            if info.get("chmod") and info["chmod"].lower() != "none" and info["chmod"] is not None:
-                chmod_cmd = subprocess.run(
-                    ["chmod", info["chmod"], info["dest"]], capture_output=True, text=True
-                )
-                if chmod_cmd.returncode != 0:
-                    await query.edit_message_text(f"❌ خطا در اعمال chmod:\n{chmod_cmd.stderr}")
-                    return ConversationHandler.END
-                chmod_output = f"chmod output:\n{chmod_cmd.stdout}{chmod_cmd.stderr}\n"
-
-            systemctl_output = ""
-            svc_name = fix_service_name(info.get("service"))
-            if svc_name:
-                check_cmd = subprocess.run(
-                    ["systemctl", "status", svc_name], capture_output=True, text=True
-                )
-                if check_cmd.returncode != 0:
-                    await query.edit_message_text(f"❌ سرویس {svc_name} وجود ندارد یا فعال نیست:\n{check_cmd.stderr}")
-                    return ConversationHandler.END
-
-                subprocess.run(["systemctl", "daemon-reload"], check=True)
-                restart_cmd = subprocess.run(
-                    ["systemctl", "restart", svc_name], capture_output=True, text=True
-                )
-                enable_cmd = subprocess.run(
-                    ["systemctl", "enable", svc_name], capture_output=True, text=True
-                )
-                if restart_cmd.returncode != 0:
-                    await query.edit_message_text(
-                        f"❌ خطا در ریستارت سرویس {svc_name}:\n{restart_cmd.stderr}"
-                    )
-                    return ConversationHandler.END
-                systemctl_output = (
-                    f"systemctl restart output:\n{restart_cmd.stdout}{restart_cmd.stderr}\n"
-                    f"systemctl enable output:\n{enable_cmd.stdout}{enable_cmd.stderr}\n"
-                )
-
-            msg = f"✅ فایل {filename} با موفقیت آپدیت شد.\n\n"
-            msg += f"git pull output:\n{git_pull.stdout}{git_pull.stderr}\n"
-            msg += f"cp output:\n{cp_cmd.stdout}{cp_cmd.stderr}\n"
-            if chmod_output:
-                msg += chmod_output
-            if systemctl_output:
-                msg += systemctl_output
-
-            await query.edit_message_text(msg)
-        except Exception:
-            await query.edit_message_text(f"❌ خطا در آپدیت فایل {filename}:\n{traceback.format_exc()}")
-        return ConversationHandler.END
-
-    # حذف فایل
-    if data.startswith("delete_"):
-        filename = data[len("delete_"):]
-        if filename not in FILES_AND_SERVICES:
-            await query.edit_message_text("فایل مورد نظر یافت نشد.")
-            return ConversationHandler.END
-        context.user_data["delete_file"] = filename
-        await query.edit_message_text(
-            f"آیا مطمئن هستید که می‌خواهید فایل '{filename}' را حذف کنید؟\n\n"
-            f"برای تایید 'بله' را ارسال کنید یا /cancel را برای لغو."
-        )
-        return CONFIRM_DELETE
-
-    # ویرایش فایل
-    if data.startswith("edit_"):
-        filename = data[len("edit_"):]
-        if filename not in FILES_AND_SERVICES:
-            await query.edit_message_text("فایل مورد نظر یافت نشد.")
-            return ConversationHandler.END
-        context.user_data["edit_file"] = filename
-
-        buttons = [
-            [InlineKeyboardButton("نام فایل", callback_data="edit_name")],
-            [InlineKeyboardButton("مسیر منبع", callback_data="edit_source")],
-            [InlineKeyboardButton("مسیر مقصد", callback_data="edit_dest")],
-            [InlineKeyboardButton("سرویس systemd", callback_data="edit_service")],
-            [InlineKeyboardButton("سطح دسترسی (chmod)", callback_data="edit_chmod")],
-            [InlineKeyboardButton("بازگشت به منوی اصلی", callback_data="main_menu")],
-        ]
-        reply_markup = InlineKeyboardMarkup(buttons)
-
-        await query.edit_message_text(
-            f"مشخصات فعلی فایل '{filename}':\n"
-            f"نام: {filename}\n"
-            f"مسیر منبع: {FILES_AND_SERVICES[filename]['source']}\n"
-            f"مسیر مقصد: {FILES_AND_SERVICES[filename]['dest']}\n"
-            f"سرویس: {FILES_AND_SERVICES[filename]['service']}\n"
-            f"chmod: {FILES_AND_SERVICES[filename]['chmod']}\n\n"
-            "کدام قسمت را می‌خواهید ویرایش کنید؟",
-            reply_markup=reply_markup,
-        )
-        return EDIT_CHOOSE_FIELD
-
-    # بازگشت به منوی اصلی
-    if data == "main_menu":
-        return await start(update, context)
-
-    return ConversationHandler.END
-
-async def edit_choose_field(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    if not is_admin(user_id):
-        await query.edit_message_text("شما ادمین نیستید.")
-        return ConversationHandler.END
-
-    data = query.data
-    filename = context.user_data.get("edit_file")
-    if not filename:
-        await query.edit_message_text("فایل انتخابی یافت نشد.")
-        return ConversationHandler.END
-
-    if data == "main_menu":
-        return await start(update, context)
-
-    field_map = {
-        "edit_name": "name",
-        "edit_source": "source",
-        "edit_dest": "dest",
-        "edit_service": "service",
-        "edit_chmod": "chmod",
-    }
-
-    if data in field_map:
-        context.user_data["edit_field"] = field_map[data]
-        await query.edit_message_text(f"لطفاً مقدار جدید برای '{field_map[data]}' را ارسال کنید:")
-        return EDIT_NEW_VALUE
-
-    return ConversationHandler.END
-
-async def edit_new_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    new_val = update.message.text.strip()
-    filename = context.user_data.get("edit_file")
-    field = context.user_data.get("edit_field")
-    if not filename or not field:
-        await update.message.reply_text("خطا در ویرایش. لطفا دوباره تلاش کنید.")
-        return ConversationHandler.END
-
-    if field == "service":
-        new_val = fix_service_name(new_val)
-
-    if field == "name":
-        if new_val in FILES_AND_SERVICES and new_val != filename:
-            await update.message.reply_text("نام جدید قبلا وجود دارد. نام دیگری انتخاب کنید:")
-            return EDIT_NEW_VALUE
-        FILES_AND_SERVICES[new_val] = FILES_AND_SERVICES.pop(filename)
-        context.user_data["edit_file"] = new_val
-        filename = new_val
-    else:
-        FILES_AND_SERVICES[filename][field] = new_val
-
-    await update.message.reply_text(
-        f"مقدار '{field}' با موفقیت به '{new_val}' تغییر کرد.\n\n"
-        f"برای ویرایش قسمت دیگر /start را ارسال کنید یا ادامه دهید."
+async def start_add_wizard(query, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["add_item"] = {}
+    await query.edit_message_text(
+        "🧩 ساخت دکمهٔ جدید\n\n"
+        "مرحله ۱/۴ — لطفاً «نام نمایشی دکمه» را بفرست:\n"
+        "مثال: myscript.py یا backup-job"
     )
-    return ConversationHandler.END
+    # سوییچ به حالت مکالمه
+    # این تابع فقط پیام را عوض می‌کند؛ شروع مکالمه با /add انجام می‌شود
+    # اما چون از دکمه آمدیم، باید انتظار پیام بعدی را داشته باشیم
+    context.user_data["add_state"] = ADD_NAME
 
-async def confirm_delete(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().lower()
-    filename = context.user_data.get("delete_file")
-    if not filename:
-        await update.message.reply_text("فایل انتخابی یافت نشد.")
-        return ConversationHandler.END
-
-    if text == "بله":
-        FILES_AND_SERVICES.pop(filename, None)
-        await update.message.reply_text(f"✅ فایل '{filename}' با موفقیت حذف شد.\n\nبرای مشاهده لیست جدید /start را ارسال کنید.")
-    else:
-        await update.message.reply_text("❌ عملیات حذف لغو شد.")
-
-    return ConversationHandler.END
-
-async def add_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def add_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        return ConversationHandler.END
-    context.user_data["new_file"] = {}
-    name = update.message.text.strip()
-    if not name:
-        await update.message.reply_text("نام فایل نمی‌تواند خالی باشد. لطفاً دوباره وارد کنید:")
-        return ASK_NAME
-    context.user_data["new_file"]["name"] = name
+        return
+    context.user_data["add_item"] = {}
+    context.user_data["add_state"] = ADD_NAME
     await update.message.reply_text(
-        "مرحله 2/5\nمسیر فایل منبع داخل مخزن (نسبت به پوشه repo) را وارد کنید (مثلاً scripts/my_script.py):"
+        "🧩 ساخت دکمهٔ جدید\n\n"
+        "مرحله ۱/۴ — لطفاً «نام نمایشی دکمه» را بفرست:"
     )
-    return ASK_SOURCE
 
-async def add_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    source = update.message.text.strip()
-    if not source:
-        await update.message.reply_text("مسیر فایل منبع نمی‌تواند خالی باشد. لطفاً دوباره وارد کنید:")
-        return ASK_SOURCE
-    context.user_data["new_file"]["source"] = os.path.join(REPO_PATH, source)
-    await update.message.reply_text(
-        "مرحله 3/5\nمسیر فایل مقصد در سرور را وارد کنید (مثلاً /usr/local/bin/my_script.py):"
-    )
-    return ASK_DEST
+async def add_message_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
 
-async def add_dest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    dest = update.message.text.strip()
-    if not dest:
-        await update.message.reply_text("مسیر فایل مقصد نمی‌تواند خالی باشد. لطفاً دوباره وارد کنید:")
-        return ASK_DEST
-    context.user_data["new_file"]["dest"] = dest
-    await update.message.reply_text("مرحله 4/5\nنام سرویس systemd (اگر ندارد 'none' وارد کنید):")
-    return ASK_SERVICE
+    state = context.user_data.get("add_state")
+    if state is None:
+        return  # خارج از ویزارد
 
-async def add_service(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    svc = update.message.text.strip()
-    if svc.lower() == "none":
-        svc = None
-    context.user_data["new_file"]["service"] = svc
-    await update.message.reply_text("مرحله 5/5\nسطح دسترسی فایل (مثلاً 755 یا 'none' اگر نمی‌خواهید تغییر دهید):")
-    return ASK_CHMOD
+    msg = (update.message.text or "").strip()
 
-async def add_chmod(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chmod = update.message.text.strip()
-    if chmod.lower() == "none":
-        chmod = None
-    context.user_data["new_file"]["chmod"] = chmod
+    # مرحله 1: نام
+    if state == ADD_NAME:
+        items = load_items()
+        if msg in items:
+            await update.message.reply_text("⚠️ آیتمی با این نام وجود دارد. یک نام دیگر بفرست.")
+            return
+        context.user_data["add_item"]["name"] = msg
+        context.user_data["add_state"] = ADD_SOURCE
+        await update.message.reply_text(
+            "مرحله ۲/۴ — «مسیر منبع در ریپو» یا مسیر مطلق را بفرست:\n"
+            f"مثال: {REPO_PATH}/myscript.py یا relative مثل myscript.py"
+        )
+        return
 
-    new_file = context.user_data["new_file"]
+    # مرحله 2: منبع
+    if state == ADD_SOURCE:
+        src = msg
+        if not src.startswith("/"):
+            # اگر نسبی بود، از ریشهٔ ریپو در نظر بگیر
+            src = f"{REPO_PATH.rstrip('/')}/{src}"
+        context.user_data["add_item"]["source"] = src
+        context.user_data["add_state"] = ADD_DEST
+        await update.message.reply_text(
+            "مرحله ۳/۴ — «مسیر مقصد روی سرور» را بفرست (مطلق):\n"
+            "مثال: /usr/local/bin/myscript.py"
+        )
+        return
 
-    FILES_AND_SERVICES[new_file["name"]] = {
-        "source": new_file["source"],
-        "dest": new_file["dest"],
-        "service": new_file["service"],
-        "chmod": new_file["chmod"],
-    }
+    # مرحله 3: مقصد
+    if state == ADD_DEST:
+        if not msg.startswith("/"):
+            await update.message.reply_text("❌ مسیر مقصد باید مطلق باشد و با / شروع شود. دوباره بفرست.")
+            return
+        context.user_data["add_item"]["dest"] = msg
+        context.user_data["add_state"] = ADD_SERVICE
+        await update.message.reply_text(
+            "مرحله ۴/۴ — «نام سرویس systemd» (اختیاری) را بفرست:\n"
+            "- می‌تونی خالی بگذاری.\n"
+            "- با یا بدون .service بفرست (هر دو قبوله)."
+        )
+        return
 
-    reply_markup = build_main_keyboard()
+    # مرحله 4: سرویس
+    if state == ADD_SERVICE:
+        svc = msg.strip()
+        if svc == "":
+            svc = None
+        else:
+            # اگر کاربر .service ننویسد هم اوکی
+            if not svc.endswith(".service") and not svc.endswith(".timer"):
+                svc = svc + ".service"
+        context.user_data["add_item"]["service"] = svc
+        context.user_data["add_state"] = ADD_CONFIRM
 
-    await update.message.reply_text(
-        f"✅ فایل جدید با موفقیت اضافه شد:\n\n"
-        f"نام: {new_file['name']}\n"
-        f"source: {new_file['source']}\n"
-        f"dest: {new_file['dest']}\n"
-        f"service: {new_file['service']}\n"
-        f"chmod: {new_file['chmod']}\n\n"
-        f"برای بازگشت به لیست دکمه‌ها، /start را ارسال کنید.",
-        reply_markup=reply_markup,
-    )
-    return ConversationHandler.END
+        item = context.user_data["add_item"]
+        preview = (
+            f"نام: {item['name']}\n"
+            f"منبع: {item['source']}\n"
+            f"مقصد: {item['dest']}\n"
+            f"سرویس: {item['service']}\n\n"
+            "برای تایید «yes» و برای لغو «no» را بفرست."
+        )
+        await update.message.reply_text(preview)
+        return
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("❌ عملیات لغو شد.")
-    return ConversationHandler.END
+    # تایید نهایی
+    if state == ADD_CONFIRM:
+        if msg.lower() not in ("y", "yes", "بله", "ok", "تایید"):
+            await update.message.reply_text("عملیات لغو شد.")
+            context.user_data.pop("add_state", None)
+            context.user_data.pop("add_item", None)
+            return
+
+        item = context.user_data.get("add_item", {})
+        name = item.get("name")
+        source = item.get("source")
+        dest = item.get("dest")
+        service = item.get("service")
+
+        items = load_items()
+        items[name] = {"source": source, "dest": dest, "service": service}
+        save_items(items)
+
+        context.user_data.pop("add_state", None)
+        context.user_data.pop("add_item", None)
+
+        await update.message.reply_text(
+            f"✅ دکمهٔ «{name}» ساخته شد.\n/ start را بزن تا منو به‌روز شود."
+        )
+        return
+
+# ──────────────────────────────[ دستورات ]────────────────────────────────
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await start(update, context)
+
+async def cmd_pull(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    await git_pull(update)
+
+async def cmd_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    items = load_items()
+    lines = []
+    for k, v in items.items():
+        lines.append(f"- {k}  | source: {v.get('source')}  | dest: {v.get('dest')}  | service: {v.get('service')}")
+    await reply_log(update, "📜 لیست آیتم‌ها:\n" + "\n".join(lines), "items")
+
+async def cmd_remove(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    args = (update.message.text or "").split(maxsplit=1)
+    if len(args) < 2:
+        await update.message.reply_text("استفاده: /remove <نام آیتم>")
+        return
+    name = args[1].strip()
+    items = load_items()
+    if name not in items:
+        await update.message.reply_text("❌ چنین آیتمی پیدا نشد.")
+        return
+    if name in DEFAULT_ITEMS:
+        await update.message.reply_text("⚠️ آیتم‌های پیش‌فرض قابل حذف نیستند. می‌توانی override کنی یا نام دیگری بسازی.")
+        return
+    items.pop(name, None)
+    save_items(items)
+    await update.message.reply_text(f"✅ آیتم «{name}» حذف شد.")
+
+# ──────────────────────────────[ main ]────────────────────────────────────
+
+def build_app():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # دستورات
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("pull", cmd_pull))
+    app.add_handler(CommandHandler("items", cmd_items))
+    app.add_handler(CommandHandler("add", add_cmd))
+    app.add_handler(CommandHandler("remove", cmd_remove))
+
+    # دکمه‌ها
+    app.add_handler(CallbackQueryHandler(button))
+
+    # روتینگ پیام‌های ویزارد ساخت دکمه
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, add_message_router))
+
+    return app
 
 def main():
-    app = ApplicationBuilder().token("7666791827:AAH9o2QxhvT2QbzAHKjbWmDhaieDCiT1ldY").build()
-
-    conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("start", start),
-            CallbackQueryHandler(button, pattern="^(add_new_file|update_|edit_|delete_|main_menu)$")
-        ],
-        states={
-            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_name)],
-            ASK_SOURCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_source)],
-            ASK_DEST: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_dest)],
-            ASK_SERVICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_service)],
-            ASK_CHMOD: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_chmod)],
-
-            EDIT_CHOOSE_FIELD: [CallbackQueryHandler(edit_choose_field, pattern="^edit_.*|main_menu$")],
-            EDIT_NEW_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_new_value)],
-
-            CONFIRM_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_delete)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        allow_reentry=True,
-    )
-
-    app.add_handler(conv_handler)
-    app.run_polling()
+    # مطمئن شو مسیر State وجود دارد
+    ensure_state_dir()
+    app = build_app()
+    app.run_polling(allowed_updates=["message", "callback_query"])
 
 if __name__ == "__main__":
     main()
