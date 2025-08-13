@@ -111,7 +111,7 @@ def kb_to_human(kb):
 # 📌 تابع به‌روزرسانی مصرف لحظه‌ای (مثل log_user_traffic.py)
 
 def update_live_usage():
-    """به‌روزرسانی مصرف لحظه‌ای کاربران از iptables + اعمال محدودیت در صورت عبور از سقف"""
+    """به‌روزرسانی مصرف کاربران از iptables + اعمال قفل حجمی"""
 
     def parse_iptables_lines():
         out = subprocess.getoutput("iptables -L SSH_USERS -v -n -x 2>/dev/null")
@@ -121,32 +121,26 @@ def update_live_usage():
             if not line or line.startswith(("Chain", "pkts", "target")):
                 continue
             parts = line.split()
-            # تلاش برای گرفتن شمارنده‌ی بایت‌ها
+            # گرفتن بایت‌ها
             try:
                 bytes_counter = int(parts[1])
             except Exception:
-                # fallback: اولین عدد معتبر در خط
                 nums = [int(tok) for tok in parts if tok.isdigit()]
                 if not nums:
                     continue
                 bytes_counter = nums[0]
-
-            # استخراج UID از خط
-            try:
-                toks = line.split()
-                if "--uid-owner" in toks:
-                    uid = toks[toks.index("--uid-owner") + 1]
-                else:
-                    import re
-                    m = re.search(r"--uid-owner\s+(\d+)", line)
-                    uid = m.group(1) if m else None
-                if uid:
-                    result[uid] = bytes_counter
-            except Exception:
-                continue
+            # گرفتن UID
+            uid = None
+            if "--uid-owner" in parts:
+                uid = parts[parts.index("--uid-owner") + 1]
+            else:
+                m = re.search(r"--uid-owner\s+(\d+)", line)
+                if m:
+                    uid = m.group(1)
+            if uid:
+                result[uid] = bytes_counter
         return result
 
-    # ساخت map همه‌ی uid→username
     def get_all_users_map():
         users_map = {}
         try:
@@ -187,17 +181,12 @@ def update_live_usage():
         block_reason = data.get("block_reason") or None
         last_bytes = int(data.get("last_iptables_bytes", 0))
 
-        # مقداردهی اولیه
         if last_bytes == 0 and not data.get("last_checked"):
             data["last_iptables_bytes"] = int(current_bytes)
             data["last_checked"] = now_ts
-            try:
-                atomic_write(limits_file, data)
-            except Exception:
-                pass
+            atomic_write(limits_file, data)
             continue
 
-        # محاسبه مصرف جدید
         delta_bytes = current_bytes - last_bytes
         if delta_bytes < 0:  # ریست شمارنده
             delta_bytes = current_bytes
@@ -210,19 +199,15 @@ def update_live_usage():
         data["last_iptables_bytes"] = int(current_bytes)
         data["last_checked"] = now_ts
 
-        # ✅ اعمال محدودیت: اگر از سقف گذشت و محدود بود، قفل کن
+        # اعمال قفل حجمی
         if limit_kb > 0 and used_kb >= limit_kb:
             if not is_blocked or block_reason != "quota":
-                # قفل با اسکریپت استاندارد
                 lock_user_account(username, "quota")
                 data["is_blocked"] = True
                 data["block_reason"] = "quota"
-                data["alert_sent"] = True  # می‌تونی ازش برای اعلان یک‌باره استفاده کنی
 
-        try:
-            atomic_write(limits_file, data)
-        except Exception:
-            pass
+        atomic_write(limits_file, data)
+
 
 
 # 📌 تابع مرتب‌سازی بر اساس زمان ساخت اکانت
@@ -236,6 +221,8 @@ def get_sorted_users():
 
 # 📌 تابع ساخت صفحه گزارش
 def build_report_page(users: list[str], page: int) -> str:
+    update_live_usage()  # مصرف را قبل از نمایش به‌روزرسانی می‌کنیم
+
     per_page = 10
     total_pages = max(1, (len(users) + per_page - 1) // per_page)
     page = max(0, min(page, total_pages - 1))
@@ -246,30 +233,29 @@ def build_report_page(users: list[str], page: int) -> str:
     for username in slice_users:
         limits_path = f"{LIMITS_DIR}/{username}.json"
         is_locked = False
-        expire_txt = ""
         usage_txt = "نامشخص"
+        expire_txt = ""
         status_emoji = "ℹ️"
 
-        # وضعیت قفل
         try:
             ps = subprocess.getoutput(f"passwd -S {username} 2>/dev/null").split()
             is_locked = (len(ps) > 1 and ps[1] == "L")
         except Exception:
-            is_locked = False
+            pass
 
         if os.path.exists(limits_path):
             try:
                 with open(limits_path, "r") as f:
                     data = json.load(f)
-                used_kb = safe_int(data.get("used", 0))
-                limit_kb = safe_int(data.get("limit", 0))
-                pct = percent_used_kb(used_kb, limit_kb) if limit_kb > 0 else 0.0
+                used_kb = int(data.get("used", 0))
+                limit_kb = int(data.get("limit", 0))
+                pct = percent_used_kb(used_kb, limit_kb) if limit_kb > 0 else 0
                 usage_txt = (
                     f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)} ({pct:.0f}%)"
                     if limit_kb > 0 else f"{kb_to_human(used_kb)}"
                 )
 
-                exp_ts = safe_int(data.get("expire_timestamp", 0))
+                exp_ts = int(data.get("expire_timestamp", 0))
                 if exp_ts:
                     days_left = int((datetime.fromtimestamp(exp_ts) - datetime.now()).total_seconds() // 86400)
                     expire_txt = f" | ⏳ {days_left} روز مانده"
@@ -277,8 +263,7 @@ def build_report_page(users: list[str], page: int) -> str:
                 if limit_kb > 0:
                     status_emoji = "🔴" if pct >= 100 else ("🟠" if pct >= 90 else "🟢")
                 else:
-                    status_emoji = "🔵"  # نامحدود
-
+                    status_emoji = "🔵"
             except Exception:
                 pass
 
@@ -287,6 +272,7 @@ def build_report_page(users: list[str], page: int) -> str:
 
     header = f"🧾 گزارش کاربران — صفحه {page + 1} از {total_pages}\n\n"
     return header + ("\n".join(lines) if lines else "لیستی برای نمایش وجود ندارد.")
+
 
 
 
