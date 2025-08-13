@@ -1,4 +1,3 @@
-#cat > /root/updater_bot.py << 'EOF'
 # /root/updater_bot.py
 # -*- coding: utf-8 -*-
 
@@ -10,7 +9,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFi
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ContextTypes, filters
+    ContextTypes
 )
 
 # ───────── پیکربندی ─────────
@@ -22,11 +21,14 @@ ITEMS_JSON  = f"{STATE_DIR}/items.json"
 TELE_LIMIT  = 3500
 UPDATER_GUESS = "sshmanagerbot_updater.service"
 
-STATIC_SERVICES = {"check-expire.service", "log-user-traffic.service"}
+STATIC_SERVICES = {
+    "check-expire.service",
+    "log-user-traffic.service",
+}
 
 # ───────── آیتم‌های پیش‌فرض ─────────
 def detect_self_source():
-    for fname in ("Updater_bot.py","updater_bot.py"):
+    for fname in ("Updater_bot.py", "updater_bot.py"):
         p = f"{REPO_PATH}/{fname}"
         if os.path.exists(p):
             return p
@@ -53,16 +55,6 @@ DEFAULT_ITEMS = {
         "dest":   "/usr/local/bin/log_user_traffic.py",
         "service": "log-user-traffic.service",
     },
-    "log-user-traffic.service": {
-        "source": f"{REPO_PATH}/log-user-traffic.service",
-        "dest":   "/etc/systemd/system/log-user-traffic.service",
-        "service": "log-user-traffic.service",
-    },
-    "check-expire.service": {
-        "source": f"{REPO_PATH}/check-expire.service",
-        "dest":   "/etc/systemd/system/check-expire.service",
-        "service": "check-expire.service",
-    },
     "Updater Bot (self)": {
         "source": detect_self_source(),
         "dest":   "/root/updater_bot.py",
@@ -71,8 +63,11 @@ DEFAULT_ITEMS = {
 }
 
 # ───────── ابزار ─────────
-def is_admin(uid: int) -> bool: return uid == ADMIN_ID
-def ensure_state(): Path(STATE_DIR).mkdir(parents=True, exist_ok=True)
+def is_admin(uid: int) -> bool:
+    return uid == ADMIN_ID
+
+def ensure_state():
+    Path(STATE_DIR).mkdir(parents=True, exist_ok=True)
 
 def load_items():
     ensure_state()
@@ -87,29 +82,28 @@ def load_items():
 
 def save_items(items: dict):
     ensure_state()
-    user_items = {k:v for k,v in items.items() if k not in DEFAULT_ITEMS}
+    user_items = {k: v for k, v in items.items() if k not in DEFAULT_ITEMS}
     with open(ITEMS_JSON, "w", encoding="utf-8") as f:
         json.dump(user_items, f, ensure_ascii=False, indent=2)
 
 def codeblock(text: str) -> str:
     return f"```\n{text}\n```"
 
-async def send_or_file_for_query(q, text: str, fname: str):
+async def send_or_file(target, text: str, fname: str):
     if len(text) > TELE_LIMIT:
         path = f"/tmp/{fname}.txt"
-        with open(path,"w",encoding="utf-8") as f: f.write(text)
-        await q.edit_message_text("📄 خروجی طولانی است؛ فایل جداگانه ارسال شد.")
-        await q.message.reply_document(InputFile(path), caption="📄 خروجی کامل عملیات")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        if hasattr(target, "edit_message_text"):
+            await target.edit_message_text("📄 خروجی طولانی است؛ فایل جداگانه ارسال شد.")
+            await target.message.reply_document(InputFile(path), caption="📄 خروجی کامل عملیات")
+        else:
+            await target.reply_document(InputFile(path), caption="📄 خروجی کامل")
     else:
-        await q.edit_message_text(codeblock(text), parse_mode=ParseMode.MARKDOWN_V2)
-
-async def send_or_file_for_update(upd: Update, text: str, fname: str):
-    if len(text) > TELE_LIMIT:
-        path = f"/tmp/{fname}.txt"
-        with open(path,"w",encoding="utf-8") as f: f.write(text)
-        await upd.message.reply_document(InputFile(path), caption="📄 خروجی کامل")
-    else:
-        await upd.message.reply_text(codeblock(text), parse_mode=ParseMode.MARKDOWN_V2)
+        if hasattr(target, "edit_message_text"):
+            await target.edit_message_text(codeblock(text), parse_mode=ParseMode.MARKDOWN_V2)
+        else:
+            await target.reply_text(codeblock(text), parse_mode=ParseMode.MARKDOWN_V2)
 
 def sh(cmd: str, timeout: int = 180):
     p = subprocess.run(cmd, shell=True, text=True,
@@ -177,17 +171,17 @@ def systemd_reload_enable_restart(service: str):
     svc = normalize_service(service)
     if svc:
         if svc in STATIC_SERVICES:
-            timer = svc.replace(".service",".timer")
+            timer = svc.replace(".service", ".timer")
             if os.path.exists(f"/etc/systemd/system/{timer}"):
                 for cmd in (f"systemctl enable {timer}", f"systemctl start {timer}", f"systemctl status {timer}"):
-                    _,o = sh(cmd); log.append(f"$ {cmd}\n{o}")
+                    _, o = sh(cmd); log.append(f"$ {cmd}\n{o}")
         else:
             kill_service_processes(svc)
             for cmd in (f"systemctl enable {svc}", f"systemctl restart {svc}", f"systemctl status {svc}"):
-                _,o = sh(cmd); log.append(f"$ {cmd}\n{o}")
+                _, o = sh(cmd); log.append(f"$ {cmd}\n{o}")
     return "\n".join(log)
 
-# ───────── سرویس‌ها ─────────
+# ───────── سرویس‌ها + تایمرهای یک دقیقه‌ای ─────────
 SERVICE_TEMPLATES = {
     "sshmanagerbot_updater.service": """[Unit]
 Description=SSHManager Updater Bot
@@ -232,11 +226,20 @@ Restart=on-failure
 WantedBy=multi-user.target
 """,
     "check-expire.timer": """[Unit]
-Description=Run check-expire.service periodically
+Description=Run check-expire.service every 1 min
 [Timer]
-OnBootSec=2min
-OnUnitActiveSec=10min
+OnBootSec=1min
+OnUnitActiveSec=1min
 Unit=check-expire.service
+[Install]
+WantedBy=timers.target
+""",
+    "log-user-traffic.timer": """[Unit]
+Description=Run log-user-traffic.service every 1 min
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Unit=log-user-traffic.service
 [Install]
 WantedBy=timers.target
 """,
@@ -250,24 +253,24 @@ def ensure_service_file(name: str, content: str):
     return False, path
 
 def setup_services():
-    logs = []
+    logs = [f"⏱ {datetime.now()} - شروع ساخت/نصب سرویس‌ها"]
     for name, content in SERVICE_TEMPLATES.items():
         created, path = ensure_service_file(name, content)
         logs.append(f"{'✅ ایجاد شد' if created else 'ℹ️ موجود است'}: {path}")
-    logs.append(systemd_reload_enable_restart("sshmanagerbot_updater.service"))
-    logs.append(systemd_reload_enable_restart("check-user-usage.service"))
-    logs.append(systemd_reload_enable_restart("log-user-traffic.service"))
-    logs.append(systemd_reload_enable_restart("check-expire.service"))
+    for svc in ("sshmanagerbot_updater.service", "check-user-usage.service", "log-user-traffic.service", "check-expire.service"):
+        logs.append(systemd_reload_enable_restart(svc))
+    logs.append("✅ ساخت/نصب سرویس‌ها تمام شد.")
     return "\n".join(logs)
 
 # ───────── عملیات آپدیت ─────────
 def git_pull_log():
-    c,o = sh(f"git -C {shlex.quote(REPO_PATH)} pull --ff-only")
+    c, o = sh(f"git -C {shlex.quote(REPO_PATH)} pull --ff-only")
     return f"$ git -C {REPO_PATH} pull --ff-only\n{o}(exit={c})"
 
 def do_single_update(name: str):
     items = load_items()
-    if name not in items: return False, f"❌ آیتم «{name}» پیدا نشد."
+    if name not in items:
+        return False, f"❌ آیتم «{name}» پیدا نشد."
     info = items[name]
     src, dst, svc = info.get("source"), info.get("dest"), info.get("service")
     logs = [f"⏱ {datetime.now()}", f"🔧 آیتم: {name}", f"📦 منبع: {src}", f"📍 مقصد: {dst}", f"🧩 سرویس: {svc}"]
@@ -275,9 +278,10 @@ def do_single_update(name: str):
     if not src or not os.path.exists(src):
         logs.append(f"❌ منبع وجود ندارد: {src}")
         return False, "\n".join(logs)
-    c,o = cp_force(src, dst); logs.append(f"$ cp -f {src} {dst}\n{o}(exit={c})")
+    c, o = cp_force(src, dst)
+    logs.append(f"$ cp -f {src} {dst}\n{o}(exit={c})")
     if c != 0: return False, "\n".join(logs)
-    if dst.endswith((".py",".sh")):
+    if dst.endswith((".py", ".sh")):
         changed, msg = ensure_shebang(dst); logs.append(f"📜 Shebang: {msg}")
         ok, err = chmod_exec(dst); logs.append("✅ chmod +x" if ok else f"⚠️ chmod خطا: {err}")
     eff = detect_updater_service() if svc == "auto" else normalize_service(svc)
@@ -290,10 +294,11 @@ def keyboard():
     items = load_items()
     rows = [[InlineKeyboardButton(f"⭕️ آپدیت {n}", callback_data=f"u::{n}")] for n in items]
     rows.insert(0, [InlineKeyboardButton("🚀 آپدیت همه + ری‌استارت", callback_data="u_all")])
-    rows += [[InlineKeyboardButton("🛠 ساخت/نصب سرویس‌ها", callback_data="setup")],
-             [InlineKeyboardButton("📜 لیست آیتم‌ها", callback_data="list"),
-              InlineKeyboardButton("🔄 Git Pull", callback_data="pull")],
-             [InlineKeyboardButton("➕ ساخت دکمه", callback_data="add")]]
+    rows += [
+        [InlineKeyboardButton("🛠 ساخت/نصب سرویس‌ها", callback_data="setup")],
+        [InlineKeyboardButton("📜 لیست آیتم‌ها", callback_data="list"),
+         InlineKeyboardButton("🔄 Git Pull", callback_data="pull")]
+    ]
     return InlineKeyboardMarkup(rows)
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -302,33 +307,31 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query; await q.answer()
-    if not is_admin(q.from_user.id): return await q.edit_message_text("❌ دسترسی ندارید.")
+    if not is_admin(q.from_user.id):
+        return await q.edit_message_text("❌ دسترسی ندارید.")
     data = q.data or ""
     if data.startswith("u::"):
-        name = data.split("::",1)[1]
+        name = data.split("::", 1)[1]
         await q.edit_message_text(f"⏳ در حال آپدیت «{name}» ...")
-        ok, log = do_single_update(name)
-        await send_or_file_for_query(q, log, f"update-{name}")
+        _, log = do_single_update(name)
+        await send_or_file(q, log, f"update-{name}")
     elif data == "u_all":
         await q.edit_message_text("⏳ در حال آپدیت همه آیتم‌ها ...")
         all_logs = []
         for name in load_items().keys():
             _, log = do_single_update(name)
             all_logs.append(log)
-        await send_or_file_for_query(q, "\n\n".join(all_logs), "update-all")
+        await send_or_file(q, "\n\n".join(all_logs), "update-all")
     elif data == "pull":
         await q.edit_message_text("⏳ در حال git pull ...")
-        await send_or_file_for_query(q, git_pull_log(), "git-pull")
+        await send_or_file(q, git_pull_log(), "git-pull")
     elif data == "list":
         items = load_items()
-        lines = [f"- {k} | src: {v.get('source')} | dst: {v.get('dest')} | svc: {v.get('service')}" for k,v in items.items()]
-        await send_or_file_for_query(q, "📜 لیست آیتم‌ها:\n" + "\n".join(lines), "items")
+        lines = [f"- {k} | src: {v.get('source')} | dst: {v.get('dest')} | svc: {v.get('service')}" for k, v in items.items()]
+        await send_or_file(q, "📜 لیست آیتم‌ها:\n" + "\n".join(lines), "items")
     elif data == "setup":
         await q.edit_message_text("⏳ در حال ساخت/نصب سرویس‌ها ...")
-        await send_or_file_for_query(q, setup_services(), "setup-services")
-    elif data == "add":
-        context.user_data["add_state"] = 1; context.user_data["new_item"] = {}
-        await q.edit_message_text("نام دکمه را بفرست:")
+        await send_or_file(q, setup_services(), "setup-services")
 
 # ───────── main ─────────
 def main():
