@@ -557,26 +557,31 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
         await query.message.reply_text("📆 مدت مورد نظر را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
         return ASK_RENEW_VALUE
     else:
-        # current volume info shown in next step
+        # داخل handle_extend_action وقتی action == "renew_volume":
         limits_file = f"/etc/sshmanager/limits/{username}.json"
         current_volume = "نامشخص"
         if os.path.exists(limits_file):
             try:
                 with open(limits_file) as f:
                     data = json.load(f)
-                used = int(data.get("used", 0))
-                limit = int(data.get("limit", 0))
-                current_volume = f"{used//1024}MB / {limit//1024}MB"
+                used = safe_int(data.get("used", 0))
+                limit = safe_int(data.get("limit", 0))
+                current_volume = f"{kb_to_human(used)} / {kb_to_human(limit)}"
             except Exception:
                 pass
         keyboard = [
             [InlineKeyboardButton("10 گیگ", callback_data="add_gb_10")],
             [InlineKeyboardButton("20 گیگ", callback_data="add_gb_20")],
             [InlineKeyboardButton("35 گیگ", callback_data="add_gb_35")],
-            [InlineKeyboardButton("50 گیگ", callback_data="add_gb_50")]
+            [InlineKeyboardButton("50 گیگ", callback_data="add_gb_50")],
         ]
-        await query.message.reply_text(f"📶 حجم فعلی `{username}`: `{current_volume}`\n\nمقدار اضافه:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.reply_text(
+            f"📶 حجم فعلی `{username}`: `{current_volume}`\n\nمقدار اضافه:",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown",
+        )
         return ASK_RENEW_VALUE
+
 
 ###################
 
