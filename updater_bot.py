@@ -15,7 +15,7 @@ from telegram.ext import (
 )
 
 # ───────── پیکربندی ─────────
-BOT_TOKEN = "PUT-YOUR-BOT-TOKEN-HERE"
+BOT_TOKEN = "7666791827:AAGeLPPlzRYb-tVke_nq6wIYtxz-fBtY9fg"
 ADMIN_ID = 8062924341
 REPO_PATH = "/root/sshmanager_repo"
 
