@@ -111,44 +111,54 @@ def kb_to_human(kb):
 # 📌 تابع به‌روزرسانی مصرف لحظه‌ای (مثل log_user_traffic.py)
 
 def update_live_usage():
-    """به‌روزرسانی مصرف کاربران از iptables + اعمال قفل حجمی"""
+    """به‌روزرسانی مصرف لحظه‌ای کاربران از iptables"""
 
     def parse_iptables_lines():
+        """خوندن داده‌های مصرف از iptables"""
         out = subprocess.getoutput("iptables -L SSH_USERS -v -n -x 2>/dev/null")
         result = {}
         for line in out.splitlines():
             line = line.strip()
             if not line or line.startswith(("Chain", "pkts", "target")):
                 continue
+            if "--uid-owner" not in line:
+                continue
+
             parts = line.split()
-            # گرفتن بایت‌ها
             try:
                 bytes_counter = int(parts[1])
-            except Exception:
-                nums = [int(tok) for tok in parts if tok.isdigit()]
-                if not nums:
+            except ValueError:
+                # پیدا کردن اولین عدد معتبر
+                bytes_counter = next((int(tok) for tok in parts if tok.isdigit()), None)
+                if bytes_counter is None:
                     continue
-                bytes_counter = nums[0]
+
             # گرفتن UID
-            uid = None
-            if "--uid-owner" in parts:
-                uid = parts[parts.index("--uid-owner") + 1]
-            else:
-                m = re.search(r"--uid-owner\s+(\d+)", line)
-                if m:
-                    uid = m.group(1)
-            if uid:
-                result[uid] = bytes_counter
+            try:
+                toks = line.split()
+                if "--uid-owner" in toks:
+                    uid = toks[toks.index("--uid-owner") + 1]
+                else:
+                    import re
+                    m = re.search(r"--uid-owner\s+(\d+)", line)
+                    uid = m.group(1) if m else None
+                if uid:
+                    result[uid] = bytes_counter
+            except Exception:
+                continue
         return result
 
+    # یکبار گرفتن همه UID → Username
     def get_all_users_map():
         users_map = {}
         try:
             result = subprocess.run(['getent', 'passwd'], capture_output=True, text=True, check=True)
-            for ln in result.stdout.strip().splitlines():
-                p = ln.split(':')
-                if len(p) >= 3:
-                    users_map[p[2]] = p[0]
+            for line in result.stdout.strip().splitlines():
+                parts = line.split(':')
+                if len(parts) >= 3:
+                    username = parts[0]
+                    uid = parts[2]
+                    users_map[uid] = username
         except Exception:
             pass
         return users_map
@@ -176,17 +186,20 @@ def update_live_usage():
             data = {}
 
         used_kb = int(data.get("used", 0))
-        limit_kb = int(data.get("limit", 0))
-        is_blocked = bool(data.get("is_blocked", False))
-        block_reason = data.get("block_reason") or None
         last_bytes = int(data.get("last_iptables_bytes", 0))
 
+        # مقداردهی اولیه
         if last_bytes == 0 and not data.get("last_checked"):
             data["last_iptables_bytes"] = int(current_bytes)
             data["last_checked"] = now_ts
-            atomic_write(limits_file, data)
+            try:
+                with open(limits_file, "w") as fw:
+                    json.dump(data, fw, indent=4)
+            except Exception:
+                pass
             continue
 
+        # محاسبه مصرف جدید
         delta_bytes = current_bytes - last_bytes
         if delta_bytes < 0:  # ریست شمارنده
             delta_bytes = current_bytes
@@ -199,16 +212,11 @@ def update_live_usage():
         data["last_iptables_bytes"] = int(current_bytes)
         data["last_checked"] = now_ts
 
-        # اعمال قفل حجمی
-        if limit_kb > 0 and used_kb >= limit_kb:
-            if not is_blocked or block_reason != "quota":
-                lock_user_account(username, "quota")
-                data["is_blocked"] = True
-                data["block_reason"] = "quota"
-
-        atomic_write(limits_file, data)
-
-
+        try:
+            with open(limits_file, "w") as fw:
+                json.dump(data, fw, indent=4)
+        except Exception:
+            pass
 
 # 📌 تابع مرتب‌سازی بر اساس زمان ساخت اکانت
 def get_sorted_users():
@@ -220,60 +228,45 @@ def get_sorted_users():
     return [u.split(":")[0] for u in users_sorted]
 
 # 📌 تابع ساخت صفحه گزارش
-def build_report_page(users: list[str], page: int) -> str:
-    update_live_usage()  # مصرف را قبل از نمایش به‌روزرسانی می‌کنیم
-
-    per_page = 10
-    total_pages = max(1, (len(users) + per_page - 1) // per_page)
-    page = max(0, min(page, total_pages - 1))
-    start, end = page * per_page, page * per_page + per_page
-    slice_users = users[start:end]
-
-    lines = []
-    for username in slice_users:
-        limits_path = f"{LIMITS_DIR}/{username}.json"
-        is_locked = False
-        usage_txt = "نامشخص"
-        expire_txt = ""
-        status_emoji = "ℹ️"
-
-        try:
-            ps = subprocess.getoutput(f"passwd -S {username} 2>/dev/null").split()
-            is_locked = (len(ps) > 1 and ps[1] == "L")
-        except Exception:
-            pass
-
-        if os.path.exists(limits_path):
+def build_report_page(users, page):
+    start = page * 10
+    end = start + 10
+    page_users = users[start:end]
+    report_chunk = ""
+    for username in page_users:
+        limits_file = os.path.join(LIMITS_DIR, f"{username}.json")
+        limit_kb = 0
+        used_kb = 0
+        expire_ts = None
+        is_blocked = False
+        block_reason = None
+        if os.path.exists(limits_file):
             try:
-                with open(limits_path, "r") as f:
-                    data = json.load(f)
-                used_kb = int(data.get("used", 0))
-                limit_kb = int(data.get("limit", 0))
-                pct = percent_used_kb(used_kb, limit_kb) if limit_kb > 0 else 0
-                usage_txt = (
-                    f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)} ({pct:.0f}%)"
-                    if limit_kb > 0 else f"{kb_to_human(used_kb)}"
-                )
-
-                exp_ts = int(data.get("expire_timestamp", 0))
-                if exp_ts:
-                    days_left = int((datetime.fromtimestamp(exp_ts) - datetime.now()).total_seconds() // 86400)
-                    expire_txt = f" | ⏳ {days_left} روز مانده"
-
-                if limit_kb > 0:
-                    status_emoji = "🔴" if pct >= 100 else ("🟠" if pct >= 90 else "🟢")
+                with open(limits_file, "r") as f:
+                    j = json.load(f)
+                if isinstance(j, dict):
+                    limit_kb = safe_int(j.get("limit", 0))
+                    used_kb = safe_int(j.get("used", 0))
+                    expire_ts = j.get("expire_timestamp")
+                    is_blocked = bool(j.get("is_blocked", False))
+                    block_reason = j.get("block_reason")
                 else:
-                    status_emoji = "🔵"
+                    # skip non-dict content
+                    limit_kb = 0
+                    used_kb = 0
             except Exception:
                 pass
-
-        lock_txt = " | 🚫 مسدود" if is_locked else ""
-        lines.append(f"{status_emoji} `{username}` → {usage_txt}{expire_txt}{lock_txt}")
-
-    header = f"🧾 گزارش کاربران — صفحه {page + 1} از {total_pages}\n\n"
-    return header + ("\n".join(lines) if lines else "لیستی برای نمایش وجود ندارد.")
-
-
+        if limit_kb > 0:
+            percent = (used_kb / limit_kb) * 100 if limit_kb > 0 else 0
+            usage_str = f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)} ({percent:.1f}%)"
+        else:
+            usage_str = "♾ نامحدود"
+        expire_str = datetime.fromtimestamp(expire_ts).strftime("%Y-%m-%d") if expire_ts else "—"
+        status_str = "🔒" if is_blocked else "✅"
+        if is_blocked and block_reason:
+            status_str += f" ({block_reason})"
+        report_chunk += f"👤 `{username}`\n📊 مصرف: {usage_str}\n⏳ انقضا: {expire_str}\nوضعیت: {status_str}\n\n"
+    return report_chunk
 
 
 def random_str(length=10):
@@ -484,164 +477,208 @@ async def start_extend_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_extend_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return ConversationHandler.END
-
-    # آپدیت مصرف لحظه‌ای قبل از نمایش
-    try:
-        update_live_usage()
-    except Exception:
-        pass
-
     username = update.message.text.strip()
     context.user_data["renew_username"] = username
-
-    # بررسی وجود کاربر
-    result = subprocess.getoutput(f"id -u {username}")
-    if not result.isdigit():
+    # check user exists
+    check = subprocess.getoutput(f"id -u {username}")
+    if not check.isdigit():
         await update.message.reply_text("❌ این یوزرنیم وجود ندارد.")
         return ConversationHandler.END
-
-    # وضعیت قفل بودن
+    # check lock status
     passwd_s = subprocess.getoutput(f"passwd -S {username} 2>/dev/null").split()
     locked = (len(passwd_s) > 1 and passwd_s[1] == "L")
     lock_status = "🚫 مسدود" if locked else "✅ فعال"
-
-    limits_file = f"{LIMITS_DIR}/{username}.json"
-    usage_info = "نامشخص"
-    expire_date = "نامشخص"
-    type_status = "نامشخص"
-
+    # read limit
+    limits_file = f"/etc/sshmanager/limits/{username}.json"
     if os.path.exists(limits_file):
         try:
-            with open(limits_file, "r") as f:
+            with open(limits_file) as f:
                 data = json.load(f)
-
-            used_kb = safe_int(data.get("used", 0))
-            limit_kb = safe_int(data.get("limit", 0))
-            acc_type = data.get("type", "limited")
-            type_status = "✅ محدود (حجمی)" if acc_type == "limited" else "✅ نامحدود"
-
-            percent = int(percent_used_kb(used_kb, limit_kb)) if limit_kb > 0 else 0
-            expire_ts = safe_int(data.get("expire_timestamp", 0))
+            used_kb = int(data.get("used", 0))
+            limit_kb = int(data.get("limit", 0))
+            percent = int((used_kb / max(1, limit_kb)) * 100) if limit_kb > 0 else 0
+            type_status = "✅ محدود (حجمی)" if data.get("type") == "limited" else "✅ نامحدود"
+            expire_ts = int(data.get("expire_timestamp", 0)) if data.get("expire_timestamp") else None
             expire_date = datetime.fromtimestamp(expire_ts).strftime("%Y-%m-%d") if expire_ts else "نامشخص"
-
-            usage_info = (
-                f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)} ({percent}%)"
-                if limit_kb > 0 else f"{kb_to_human(used_kb)}"
-            )
+            usage_info = f"{used_kb // 1024}MB / {limit_kb // 1024}MB ({percent}%)"
         except Exception:
-            pass
+            usage_info = "نامشخص"
+            expire_date = "نامشخص"
+            type_status = "نامشخص"
+    else:
+        usage_info = "نامشخص"
+        expire_date = "نامشخص"
+        type_status = "⛔️ فاقد محدودیت حجمی"
 
-    text = (
-        f"👤 یوزر: `{username}`\n"
-        f"🔐 وضعیت: {lock_status}\n"
-        f"📦 نوع اکانت: {type_status}\n"
+    await update.message.reply_text(
+        f"👤 اطلاعات اکانت: `{username}`\n"
         f"📊 مصرف: {usage_info}\n"
-        f"🗓 پایان اعتبار: {expire_date}\n\n"
-        "یکی از گزینه‌های تمدید را انتخاب کنید:"
+        f"⏳ تاریخ انقضا: {expire_date}\n"
+        f"🔐 وضعیت قفل: {lock_status}\n"
+        f"{type_status}",
+        parse_mode="Markdown"
     )
 
     keyboard = [
-        [InlineKeyboardButton("➕ تمدید حجمی", callback_data="renew_volume")],
-        [InlineKeyboardButton("⏳ تمدید زمانی", callback_data="renew_time")],
-        [InlineKeyboardButton("🔓 باز/بسته‌کردن کاربر", callback_data="toggle_lock")],
-        [InlineKeyboardButton("⬅️ بازگشت", callback_data="start")]
+        [InlineKeyboardButton("🕒 تمدید زمان", callback_data="renew_time"),
+         InlineKeyboardButton("📶 تمدید حجم", callback_data="renew_volume")]
     ]
-
-    await update.message.reply_text(
-        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await update.message.reply_text("لطفاً نوع تمدید را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
     return ASK_RENEW_ACTION
 
-
-
-
 async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return ConversationHandler.END
-
     query = update.callback_query
     await query.answer()
-    action = query.data
-    username = context.user_data.get("renew_username")
+    if query.from_user.id != ADMIN_ID:
+        return ConversationHandler.END
+    action = query.data  # renew_time or renew_volume
     context.user_data["renew_action"] = action
-
-    if not username:
-        await query.edit_message_text("❌ ابتدا یوزرنیم را وارد کنید.")
-        return ConversationHandler.END
-
-    limits_file = f"{LIMITS_DIR}/{username}.json"
-    used_kb = 0
-    limit_kb = 0
-
-    if os.path.exists(limits_file):
-        try:
-            with open(limits_file, "r") as f:
-                data = json.load(f)
-            used_kb = safe_int(data.get("used", 0))
-            limit_kb = safe_int(data.get("limit", 0))
-        except Exception:
-            pass
-
-    current_volume = (
-        f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)}"
-        if limit_kb > 0 else f"{kb_to_human(used_kb)}"
-    )
-
-    if action == "renew_volume":
+    username = context.user_data.get("renew_username", "")
+    if action == "renew_time":
         keyboard = [
-            [InlineKeyboardButton("1 GB", callback_data="add_gb_1"), InlineKeyboardButton("5 GB", callback_data="add_gb_5")],
-            [InlineKeyboardButton("10 GB", callback_data="add_gb_10"), InlineKeyboardButton("20 GB", callback_data="add_gb_20")],
-            [InlineKeyboardButton("35 GB", callback_data="add_gb_35"), InlineKeyboardButton("40 GB", callback_data="add_gb_40")],
-            [InlineKeyboardButton("55 GB", callback_data="add_gb_55")],
-            [InlineKeyboardButton("✏️ حجم سفارشی", callback_data="add_custom")],
-            [InlineKeyboardButton("⬅️ بازگشت", callback_data="extend_back")]
+            [InlineKeyboardButton("1️⃣ یک‌ماهه", callback_data="add_days_30")],
+            [InlineKeyboardButton("2️⃣ دو‌ماهه", callback_data="add_days_60")],
+            [InlineKeyboardButton("3️⃣ سه‌ماهه", callback_data="add_days_90")]
         ]
-        await query.edit_message_text(
-            f"👤 `{username}`\n📦 حجم فعلی: {current_volume}\n\n"
-            "یکی از گزینه‌های افزایش حجم را انتخاب کنید:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-        return ASK_RENEW_VOLUME
-
-    elif action == "renew_time":
-        keyboard = [
-            [InlineKeyboardButton("1 ماهه", callback_data="add_days_30"), InlineKeyboardButton("2 ماهه", callback_data="add_days_60")],
-            [InlineKeyboardButton("3 ماهه", callback_data="add_days_90")],
-            [InlineKeyboardButton("⬅️ بازگشت", callback_data="extend_back")]
-        ]
-        await query.edit_message_text(
-            f"👤 `{username}`\n⏳ مدت جدید را انتخاب کنید:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-        return ASK_RENEW_TIME
-
-    elif action == "toggle_lock":
-        new_state = toggle_user_lock(username)
-        await query.edit_message_text(
-            f"👤 `{username}`\n🔐 وضعیت جدید: {'🚫 مسدود' if new_state else '✅ فعال'}",
-            parse_mode="Markdown"
-        )
-        return ConversationHandler.END
-
-    elif action == "extend_back":
-        await query.edit_message_text("لطفاً دوباره یوزرنیم را ارسال کنید:")
-        return ASK_RENEW_USERNAME
-
+        await query.message.reply_text("📆 مدت مورد نظر را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ASK_RENEW_VALUE
     else:
-        await query.edit_message_text("گزینه نامعتبر است.")
-        return ConversationHandler.END
-
-        
+        # current volume info shown in next step
+        limits_file = f"/etc/sshmanager/limits/{username}.json"
+        current_volume = "نامشخص"
+        if os.path.exists(limits_file):
+            try:
+                with open(limits_file) as f:
+                    data = json.load(f)
+                used = int(data.get("used", 0))
+                limit = int(data.get("limit", 0))
+                current_volume = f"{used//1024}MB / {limit//1024}MB"
+            except Exception:
+                pass
+        keyboard = [
+            [InlineKeyboardButton("10 گیگ", callback_data="add_gb_10")],
+            [InlineKeyboardButton("20 گیگ", callback_data="add_gb_20")],
+            [InlineKeyboardButton("35 گیگ", callback_data="add_gb_35")],
+            [InlineKeyboardButton("50 گیگ", callback_data="add_gb_50")]
+        ]
+        await query.message.reply_text(f"📶 حجم فعلی `{username}`: `{current_volume}`\n\nمقدار اضافه:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ASK_RENEW_VALUE
 
 ###################
 
-
 async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
+    query = update.callback_query
+    await query.answer()
+    username = context.user_data.get("renew_username", "")
+    action = context.user_data.get("renew_action", "")
+    data = query.data
+
+    added_days = 0
+    added_gb = 0
+
+    if not username or not action:
+        await query.message.reply_text("❌ اطلاعات تمدید ناقص است.")
         return ConversationHandler.END
 
+    #uid = subprocess.getoutput(f"id -u {username}").strip()
+    rc, out, err = run_cmd(["id", "-u", username])
+    uid = out.strip() if rc == 0 else ""
+    limits_file = f"/etc/sshmanager/limits/{username}.json"
+
+    # --- تمدید زمان ---
+    if action == "renew_time" and data.startswith("add_days_"):
+        days = int(data.replace("add_days_", ""))
+        added_days = days
+
+        # خواندن تاریخ فعلی انقضا
+        output = subprocess.getoutput(f"chage -l {username} 2>/dev/null")
+        current_exp = ""
+        for line in output.splitlines():
+            if "Account expires" in line:
+                current_exp = line.split(":", 1)[1].strip()
+                break
+
+        if current_exp.lower() != "never" and current_exp:
+            try:
+                current_date = datetime.strptime(current_exp, "%b %d, %Y")
+                new_date = current_date + timedelta(days=days)
+            except Exception:
+                new_date = datetime.now() + timedelta(days=days)
+        else:
+            new_date = datetime.now() + timedelta(days=days)
+
+        subprocess.run(["sudo", "chage", "-E", new_date.strftime("%Y-%m-%d"), username], check=False)
+
+        # خواندن فایل محدودیت
+        try:
+            with open(limits_file, "r") as f:
+                j = json.load(f)
+        except Exception:
+            j = {}
+
+        # آنلاک خودکار اگر قفل موقت بوده
+        if j.get("is_blocked", False) and j.get("block_reason") != "manual":
+            subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)
+            subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)
+            subprocess.run(["sudo", "passwd", "-u", username], check=False)
+            subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
+
+            rc = subprocess.run(
+                ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                stderr=subprocess.DEVNULL
+            ).returncode
+            if rc != 0:
+                subprocess.run(
+                    ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                    check=False
+                )
+
+            j["is_blocked"] = False
+            j["block_reason"] = None
+            j["alert_sent"] = False
+
+        # به‌روزرسانی expire_timestamp
+        j["expire_timestamp"] = int(new_date.timestamp())
+        with open(limits_file, "w") as fw:
+            json.dump(j, fw, indent=4)
+
+        await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
+        context.user_data["added_days"] = added_days
+
+        # پیشنهاد تمدید حجم
+        keyboard = [
+            [InlineKeyboardButton("➕ تمدید حجم", callback_data="renew_volume"),
+             InlineKeyboardButton("❌ خیر", callback_data="end_extend")]
+        ]
+        await query.message.reply_text("آیا می‌خواهید حجم هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ASK_ANOTHER_RENEW
+
+    # --- تمدید حجم ---
+    elif action == "renew_volume" and data.startswith("add_gb_"):
+        gb = int(data.replace("add_gb_", ""))
+        added_gb = gb
+
+        if os.path.exists(limits_file):
+            try:
+                with open(limits_file, "r") as f:
+                    j = json.load(f)
+            except Exception:
+                j = {}
+
+            add_kb = gb * 1024 * 1024
+            j["limit"] = int(j.get("limit", 0)) + add_kb  # اضافه کردن به حجم قبلی
+
+            if j.get("is_blocked", False) and j.get("block_reason") != "manual":
+                subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)
+                subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)
+                subprocess.run(["sudo", "passwd", "-u", username], check=False)
+                subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
+
+                rc = subprocess.run(
+                    ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                    stderr=subprocess.DEVNULL
+                ).returncode
+async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     username = context.user_data.get("renew_username", "")
@@ -657,7 +694,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     rc, out, err = run_cmd(["id", "-u", username])
     uid = out.strip() if rc == 0 else ""
-    limits_file = f"{LIMITS_DIR}/{username}.json"
+    limits_file = f"/etc/sshmanager/limits/{username}.json"
 
     # --- تمدید زمان ---
     if action == "renew_time" and data.startswith("add_days_"):
@@ -688,9 +725,13 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception:
             j = {}
 
+        # آنلاک خودکار اگر قفل موقت بوده
         if j.get("is_blocked", False) and j.get("block_reason") != "manual":
+            subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)
+            subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)
             subprocess.run(["sudo", "passwd", "-u", username], check=False)
             subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
+
             rc = subprocess.run(
                 ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                 stderr=subprocess.DEVNULL
@@ -700,11 +741,13 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                     ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                     check=False
                 )
+
             j["is_blocked"] = False
             j["block_reason"] = None
             j["alert_sent"] = False
 
         j["expire_timestamp"] = int(new_date.timestamp())
+        # ذخیره امن
         atomic_write(limits_file, j)
 
         await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
@@ -729,12 +772,16 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception:
                 j = {}
 
+            # هر مقدار GB معادلِ KB: GB * 1024 * 1024
             add_kb = gb * 1024 * 1024
-            j["limit"] = int(j.get("limit", 0)) + add_kb
+            j["limit"] = int(j.get("limit", 0)) + add_kb  # اضافه کردن به حجم قبلی
 
             if j.get("is_blocked", False) and j.get("block_reason") != "manual":
+                subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)
+                subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)
                 subprocess.run(["sudo", "passwd", "-u", username], check=False)
                 subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
+
                 rc = subprocess.run(
                     ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                     stderr=subprocess.DEVNULL
@@ -744,11 +791,14 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                         ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                         check=False
                     )
+
                 j["is_blocked"] = False
                 j["block_reason"] = None
                 j["alert_sent"] = False
 
+            # ذخیره امن با atomic_write — **اصلاح شد** (قبلاً data به جای j استفاده شده بود)
             atomic_write(limits_file, j)
+
             await query.message.reply_text(f"📶 حجم اکانت `{username}` به مقدار {gb}GB افزایش یافت.", parse_mode="Markdown")
             context.user_data["added_gb"] = added_gb
         else:
@@ -761,8 +811,14 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.reply_text("آیا می‌خواهید زمان هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
         return ASK_ANOTHER_RENEW
 
-    return ConversationHandler.END
+    if added_gb and added_days:
+        await query.message.reply_text(
+            f"✅ تمدید انجام شد:\n👤 `{username}`\n🕒 +{added_days} روز\n📶 +{added_gb}GB",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
 
+    return ConversationHandler.END
 
 
 #کد جدید ادامه کانورسیشن
@@ -1273,7 +1329,7 @@ def run_bot():
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
-"""
+
     conv_extend = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_extend_user, pattern="^extend_user$")],
         states={
@@ -1284,43 +1340,6 @@ def run_bot():
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation), CallbackQueryHandler(end_extend_handler, pattern="^end_extend$")],
     )
-
-"""
-
-    #####
-    conv_handler_extend = ConversationHandler(
-        entry_points=[
-            MessageHandler(filters.Regex(r'^(?i)تمدید اکانت$'), handle_extend_username)
-        ],
-        states={
-            ASK_RENEW_USERNAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_extend_username)
-            ],
-            ASK_RENEW_ACTION: [
-                CallbackQueryHandler(handle_extend_action, pattern="^(renew_volume|renew_time|toggle_lock|extend_back)$")
-            ],
-            ASK_RENEW_VOLUME: [
-                CallbackQueryHandler(handle_extend_value, pattern="^add_gb_\d+$"),
-                CallbackQueryHandler(handle_extend_custom, pattern="^add_custom$")
-            ],
-            ASK_RENEW_TIME: [
-                CallbackQueryHandler(handle_extend_value, pattern="^add_days_\d+$")
-            ],
-            ASK_ANOTHER_RENEW: [
-                CallbackQueryHandler(handle_extend_action, pattern="^(renew_volume|renew_time)$"),
-                CallbackQueryHandler(lambda u, c: ConversationHandler.END, pattern="^end_extend$")
-            ],
-            ASK_CUSTOM_VOLUME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_extend_custom_value)
-            ]
-        },
-        fallbacks=[
-            CommandHandler("cancel", lambda u, c: ConversationHandler.END)
-        ],
-        name="extend_conv",
-        persistent=True
-    )
-
 
 
     conv_delete = ConversationHandler(
