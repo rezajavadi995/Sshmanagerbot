@@ -3,28 +3,14 @@
 
 #cat > /usr/local/bin/log_user_traffic.py << 'EOF'
 #!/usr/bin/env python3
-import subprocess
-import json
-import os
+# /root/sshmanager/log_user_traffic.py
+import os, json, subprocess
 from datetime import datetime
-import requests
 
 LIMITS_DIR = "/etc/sshmanager/limits"
 LOCK_SCRIPT = "/root/sshmanager/lock_user.py"
-BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
-ADMIN_ID = "8062924341"
-LOG_FILE = "/var/log/sshmanager-traffic.log"
 
-def send_telegram_message(text):
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data={"chat_id": ADMIN_ID, "text": text, "parse_mode": "Markdown"},
-            timeout=5
-        )
-    except Exception as e:
-        with open(LOG_FILE, "a") as logf:
-            logf.write(f"{datetime.now().isoformat()} [ارسال پیام خطا] {str(e)}\n")
+os.makedirs(LIMITS_DIR, exist_ok=True)
 
 def atomic_write(path, data):
     tmp = f"{path}.tmp"
@@ -32,111 +18,106 @@ def atomic_write(path, data):
         json.dump(data, f, indent=4)
     os.replace(tmp, path)
 
-def parse_iptables_lines():
+def run_cmd(cmd):
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
+
+def lock_user(username, reason="quota"):
+    run_cmd(["python3", LOCK_SCRIPT, username, reason])
+
+def parse_iptables():
     out = subprocess.getoutput("iptables -L SSH_USERS -v -n -x 2>/dev/null")
-    result = {}
+    res = {}
     for line in out.splitlines():
         line = line.strip()
         if not line or line.startswith(("Chain", "pkts", "target")):
             continue
-        if "--uid-owner" not in line:
-            continue
-
         parts = line.split()
+        # bytes
         try:
             bytes_counter = int(parts[1])
-        except ValueError:
-            bytes_counter = next((int(tok) for tok in parts if tok.isdigit()), None)
-            if bytes_counter is None:
-                continue
-
-        try:
-            toks = line.split()
-            if "--uid-owner" in toks:
-                uid = toks[toks.index("--uid-owner") + 1]
-            else:
-                import re
-                m = re.search(r"--uid-owner\s+(\d+)", line)
-                uid = m.group(1) if m else None
-            if uid:
-                result[uid] = bytes_counter
         except Exception:
-            continue
-    return result
+            nums = [int(tok) for tok in parts if tok.isdigit()]
+            if not nums:
+                continue
+            bytes_counter = nums[0]
+        # uid
+        uid = None
+        if "--uid-owner" in parts:
+            uid = parts[parts.index("--uid-owner")+1]
+        else:
+            import re
+            m = re.search(r"--uid-owner\s+(\d+)", line)
+            if m: uid = m.group(1)
+        if uid:
+            res[uid] = bytes_counter
+    return res
+
+def uid_map():
+    m = {}
+    rc, out, _ = run_cmd(["getent", "passwd"])
+    if rc == 0:
+        for ln in out.splitlines():
+            p = ln.split(":")
+            if len(p) >= 3:
+                m[p[2]] = p[0]
+    return m
 
 def main():
-    if not os.path.isdir(LIMITS_DIR):
+    ipt = parse_iptables()
+    if not ipt:
         return
-
-    ipt_map = parse_iptables_lines()
-    now_ts = int(datetime.now().timestamp())
-
-    for uid, current_bytes in ipt_map.items():
-        username = subprocess.getoutput(f"getent passwd {uid} | cut -d: -f1").strip()
-        if not username:
+    umap = uid_map()
+    now = int(datetime.now().timestamp())
+    for uid, cur_bytes in ipt.items():
+        user = umap.get(uid)
+        if not user:
             continue
-
-        limits_file = os.path.join(LIMITS_DIR, f"{username}.json")
-        if not os.path.exists(limits_file):
+        lf = os.path.join(LIMITS_DIR, f"{user}.json")
+        if not os.path.exists(lf):
             continue
-
         try:
-            with open(limits_file, "r") as f:
+            with open(lf, "r") as f:
                 data = json.load(f)
-            if not isinstance(data, dict):
-                continue
         except Exception:
             data = {}
 
-        used_kb = int(data.get("used", 0))
+        used_kb  = int(data.get("used", 0))
         limit_kb = int(data.get("limit", 0))
-        last_bytes = int(data.get("last_iptables_bytes", 0))
+        blocked  = bool(data.get("is_blocked", False))
+        reason   = data.get("block_reason") or None
+        last_b   = int(data.get("last_iptables_bytes", 0))
 
-        delta_bytes = current_bytes - last_bytes
-        if delta_bytes < 0:
-            delta_bytes = current_bytes
-        delta_kb = delta_bytes // 1024
+        if last_b == 0 and not data.get("last_checked"):
+            data["last_iptables_bytes"] = int(cur_bytes)
+            data["last_checked"] = now
+            atomic_write(lf, data)
+            continue
 
-        if delta_kb > 0:
-            used_kb += delta_kb
-            data["used"] = int(used_kb)
+        delta = cur_bytes - last_b
+        if delta < 0:
+            delta = cur_bytes
+        add_kb = int(delta / 1024)
+        if add_kb > 0:
+            used_kb += add_kb
+            data["used"] = used_kb
 
-        data["last_iptables_bytes"] = int(current_bytes)
-        data["last_checked"] = now_ts
+        data["last_iptables_bytes"] = int(cur_bytes)
+        data["last_checked"] = now
 
-        percent = (used_kb / limit_kb) * 100 if limit_kb > 0 else 0.0
-
-        # هشدار 90%
-        if limit_kb > 0:
-            if percent >= 90 and not data.get("alert_sent", False):
-                send_telegram_message(
-                    f"⚠️ کاربر `{username}` بیش از ۹۰٪ از حجم مجاز خود را مصرف کرده است.\n"
-                    f"📊 میزان مصرف: {percent:.0f}%\n"
-                    f"🕒 زمان بررسی: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                )
+        # اعمال محدودیت
+        if limit_kb > 0 and used_kb >= limit_kb:
+            if not blocked or reason != "quota":
+                lock_user(user, "quota")
+                data["is_blocked"] = True
+                data["block_reason"] = "quota"
                 data["alert_sent"] = True
-            elif percent < 90 and data.get("alert_sent", False):
-                data["alert_sent"] = False
 
-        # مسدودسازی
-        if limit_kb > 0 and used_kb >= limit_kb and not data.get("is_blocked", False):
-            try:
-                subprocess.run(["python3", LOCK_SCRIPT, username, "quota"], check=False)
-            except Exception as e:
-                with open(LOG_FILE, "a") as lf:
-                    lf.write(f"{datetime.now().isoformat()} lock_user call failed for {username}: {e}\n")
-            data["is_blocked"] = True
-            data["block_reason"] = "quota"
-            data["alert_sent"] = True
-            send_telegram_message(f"⛔️ حجم کاربر `{username}` تمام شد و اکانت مسدود شد.")
-
-        try:
-            atomic_write(limits_file, data)
-        except Exception as e:
-            with open(LOG_FILE, "a") as lf:
-                lf.write(f"{datetime.now().isoformat()} write failed for {limits_file}: {e}\n")
+        atomic_write(lf, data)
 
 if __name__ == "__main__":
     main()
+
+
 
 #EOF
