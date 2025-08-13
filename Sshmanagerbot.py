@@ -485,92 +485,157 @@ async def start_extend_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_extend_username(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return ConversationHandler.END
+
+    # مصرف لحظه‌ای قبل از هرچیز آپدیت شود تا عدد دقیق نمایش داده شود
+    try:
+        update_live_usage()
+    except Exception:
+        pass
+
     username = update.message.text.strip()
     context.user_data["renew_username"] = username
-    # check user exists
-    check = subprocess.getoutput(f"id -u {username}")
-    if not check.isdigit():
+
+    # بررسی وجود یوزر در سیستم
+    result = subprocess.getoutput(f"id -u {username}")
+    if not result.isdigit():
         await update.message.reply_text("❌ این یوزرنیم وجود ندارد.")
         return ConversationHandler.END
-    # check lock status
+
+    # وضعیت قفل بودن
     passwd_s = subprocess.getoutput(f"passwd -S {username} 2>/dev/null").split()
     locked = (len(passwd_s) > 1 and passwd_s[1] == "L")
     lock_status = "🚫 مسدود" if locked else "✅ فعال"
-    # read limit
-    limits_file = f"/etc/sshmanager/limits/{username}.json"
+
+    limits_file = f"{LIMITS_DIR}/{username}.json"
+    usage_info = "نامشخص"
+    expire_date = "نامشخص"
+    type_status = "نامشخص"
+
     if os.path.exists(limits_file):
         try:
-            with open(limits_file) as f:
+            with open(limits_file, "r") as f:
                 data = json.load(f)
-            used_kb = int(data.get("used", 0))
-            limit_kb = int(data.get("limit", 0))
-            percent = int((used_kb / max(1, limit_kb)) * 100) if limit_kb > 0 else 0
-            type_status = "✅ محدود (حجمی)" if data.get("type") == "limited" else "✅ نامحدود"
-            expire_ts = int(data.get("expire_timestamp", 0)) if data.get("expire_timestamp") else None
+
+            used_kb = safe_int(data.get("used", 0))
+            limit_kb = safe_int(data.get("limit", 0))
+            acc_type = data.get("type", "limited")
+            type_status = "✅ محدود (حجمی)" if acc_type == "limited" else "✅ نامحدود"
+
+            percent = int(percent_used_kb(used_kb, limit_kb)) if limit_kb > 0 else 0
+            expire_ts = safe_int(data.get("expire_timestamp", 0))
             expire_date = datetime.fromtimestamp(expire_ts).strftime("%Y-%m-%d") if expire_ts else "نامشخص"
-            usage_info = f"{used_kb // 1024}MB / {limit_kb // 1024}MB ({percent}%)"
+
+            usage_info = (
+                f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)} ({percent}%)"
+                if limit_kb > 0 else f"{kb_to_human(used_kb)}"
+            )
         except Exception:
             usage_info = "نامشخص"
             expire_date = "نامشخص"
             type_status = "نامشخص"
-    else:
-        usage_info = "نامشخص"
-        expire_date = "نامشخص"
-        type_status = "⛔️ فاقد محدودیت حجمی"
 
-    await update.message.reply_text(
-        f"👤 اطلاعات اکانت: `{username}`\n"
+    text = (
+        f"👤 یوزر: `{username}`\n"
+        f"🔐 وضعیت: {lock_status}\n"
+        f"📦 نوع اکانت: {type_status}\n"
         f"📊 مصرف: {usage_info}\n"
-        f"⏳ تاریخ انقضا: {expire_date}\n"
-        f"🔐 وضعیت قفل: {lock_status}\n"
-        f"{type_status}",
-        parse_mode="Markdown"
+        f"🗓 پایان اعتبار: {expire_date}\n\n"
+        "یکی از گزینه‌های تمدید را انتخاب کنید:"
     )
 
     keyboard = [
-        [InlineKeyboardButton("🕒 تمدید زمان", callback_data="renew_time"),
-         InlineKeyboardButton("📶 تمدید حجم", callback_data="renew_volume")]
+        [InlineKeyboardButton("➕ تمدید حجمی", callback_data="renew_volume")],
+        [InlineKeyboardButton("⏳ تمدید زمانی", callback_data="renew_time")],
+        [InlineKeyboardButton("🔓 باز/بسته‌کردن کاربر", callback_data="toggle_lock")],
+        [InlineKeyboardButton("⬅️ بازگشت", callback_data="start")]
     ]
-    await update.message.reply_text("لطفاً نوع تمدید را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    await update.message.reply_text(
+        text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard)
+    )
     return ASK_RENEW_ACTION
 
+
 async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return ConversationHandler.END
+
     query = update.callback_query
     await query.answer()
-    if query.from_user.id != ADMIN_ID:
+    action = query.data
+    username = context.user_data.get("renew_username")
+
+    if not username:
+        await query.edit_message_text("❌ ابتدا یوزرنیم را وارد کنید.")
         return ConversationHandler.END
-    action = query.data  # renew_time or renew_volume
-    context.user_data["renew_action"] = action
-    username = context.user_data.get("renew_username", "")
-    if action == "renew_time":
+
+    limits_file = f"{LIMITS_DIR}/{username}.json"
+    used_kb = 0
+    limit_kb = 0
+
+    if os.path.exists(limits_file):
+        try:
+            with open(limits_file, "r") as f:
+                data = json.load(f)
+            used_kb = safe_int(data.get("used", 0))
+            limit_kb = safe_int(data.get("limit", 0))
+        except Exception:
+            pass
+
+    # نمایش حجم فعلی با فرمت استاندارد و کاربرپسند
+    current_volume = (
+        f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)}"
+        if limit_kb > 0 else f"{kb_to_human(used_kb)}"
+    )
+
+    if action == "renew_volume":
         keyboard = [
-            [InlineKeyboardButton("1️⃣ یک‌ماهه", callback_data="add_days_30")],
-            [InlineKeyboardButton("2️⃣ دو‌ماهه", callback_data="add_days_60")],
-            [InlineKeyboardButton("3️⃣ سه‌ماهه", callback_data="add_days_90")]
+            [InlineKeyboardButton("1 GB", callback_data="add_1"), InlineKeyboardButton("5 GB", callback_data="add_5")],
+            [InlineKeyboardButton("10 GB", callback_data="add_10"), InlineKeyboardButton("20 GB", callback_data="add_20")],
+            [InlineKeyboardButton("35 GB", callback_data="add_35"), InlineKeyboardButton("40 GB", callback_data="add_40")],
+            [InlineKeyboardButton("55 GB", callback_data="add_55")],
+            [InlineKeyboardButton("✏️ حجم سفارشی", callback_data="add_custom")],
+            [InlineKeyboardButton("⬅️ بازگشت", callback_data="extend_back")]
         ]
-        await query.message.reply_text("📆 مدت مورد نظر را انتخاب کنید:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return ASK_RENEW_VALUE
+        await query.edit_message_text(
+            f"👤 `{username}`\n📦 حجم فعلی: {current_volume}\n\n"
+            "یکی از گزینه‌های افزایش حجم را انتخاب کنید:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return ASK_RENEW_VOLUME
+
+    elif action == "renew_time":
+        keyboard = [
+            # اگه بخوای ۷ روزه رو هم می‌تونم اینجا اضافه کنم
+            # [InlineKeyboardButton("7 روز", callback_data="time_7")],
+            [InlineKeyboardButton("1 ماهه", callback_data="time_30"), InlineKeyboardButton("2 ماهه", callback_data="time_60")],
+            [InlineKeyboardButton("3 ماهه", callback_data="time_90")],
+            [InlineKeyboardButton("⬅️ بازگشت", callback_data="extend_back")]
+        ]
+        await query.edit_message_text(
+            f"👤 `{username}`\n⏳ مدت جدید را انتخاب کنید:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return ASK_RENEW_TIME
+
+    elif action == "toggle_lock":
+        new_state = toggle_user_lock(username)
+        await query.edit_message_text(
+            f"👤 `{username}`\n🔐 وضعیت جدید: {'🚫 مسدود' if new_state else '✅ فعال'}",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
+    elif action == "extend_back":
+        await query.edit_message_text("لطفاً دوباره یوزرنیم را ارسال کنید:")
+        return ASK_RENEW_USERNAME
+
     else:
-        # current volume info shown in next step
-        limits_file = f"/etc/sshmanager/limits/{username}.json"
-        current_volume = "نامشخص"
-        if os.path.exists(limits_file):
-            try:
-                with open(limits_file) as f:
-                    data = json.load(f)
-                used = int(data.get("used", 0))
-                limit = int(data.get("limit", 0))
-                current_volume = f"{used//1024}MB / {limit//1024}MB"
-            except Exception:
-                pass
-        keyboard = [
-            [InlineKeyboardButton("10 گیگ", callback_data="add_gb_10")],
-            [InlineKeyboardButton("20 گیگ", callback_data="add_gb_20")],
-            [InlineKeyboardButton("35 گیگ", callback_data="add_gb_35")],
-            [InlineKeyboardButton("50 گیگ", callback_data="add_gb_50")]
-        ]
-        await query.message.reply_text(f"📶 حجم فعلی `{username}`: `{current_volume}`\n\nمقدار اضافه:", reply_markup=InlineKeyboardMarkup(keyboard))
-        return ASK_RENEW_VALUE
+        await query.edit_message_text("گزینه نامعتبر است.")
+        return ConversationHandler.END
+        
 
 ###################
 
