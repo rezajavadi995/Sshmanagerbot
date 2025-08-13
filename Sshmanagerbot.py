@@ -485,7 +485,7 @@ async def handle_extend_username(update: Update, context: ContextTypes.DEFAULT_T
     if update.effective_user.id != ADMIN_ID:
         return ConversationHandler.END
 
-    # مصرف لحظه‌ای قبل از هرچیز آپدیت شود تا عدد دقیق نمایش داده شود
+    # آپدیت مصرف لحظه‌ای
     try:
         update_live_usage()
     except Exception:
@@ -494,13 +494,13 @@ async def handle_extend_username(update: Update, context: ContextTypes.DEFAULT_T
     username = update.message.text.strip()
     context.user_data["renew_username"] = username
 
-    # بررسی وجود یوزر در سیستم
+    # بررسی وجود یوزر
     result = subprocess.getoutput(f"id -u {username}")
     if not result.isdigit():
         await update.message.reply_text("❌ این یوزرنیم وجود ندارد.")
         return ConversationHandler.END
 
-    # وضعیت قفل بودن
+    # وضعیت قفل
     passwd_s = subprocess.getoutput(f"passwd -S {username} 2>/dev/null").split()
     locked = (len(passwd_s) > 1 and passwd_s[1] == "L")
     lock_status = "🚫 مسدود" if locked else "✅ فعال"
@@ -529,9 +529,7 @@ async def handle_extend_username(update: Update, context: ContextTypes.DEFAULT_T
                 if limit_kb > 0 else f"{kb_to_human(used_kb)}"
             )
         except Exception:
-            usage_info = "نامشخص"
-            expire_date = "نامشخص"
-            type_status = "نامشخص"
+            pass
 
     text = (
         f"👤 یوزر: `{username}`\n"
@@ -555,6 +553,8 @@ async def handle_extend_username(update: Update, context: ContextTypes.DEFAULT_T
     return ASK_RENEW_ACTION
 
 
+
+
 async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return ConversationHandler.END
@@ -563,6 +563,7 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
     await query.answer()
     action = query.data
     username = context.user_data.get("renew_username")
+    context.user_data["renew_action"] = action
 
     if not username:
         await query.edit_message_text("❌ ابتدا یوزرنیم را وارد کنید.")
@@ -581,7 +582,6 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
         except Exception:
             pass
 
-    # نمایش حجم فعلی با فرمت استاندارد و کاربرپسند
     current_volume = (
         f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)}"
         if limit_kb > 0 else f"{kb_to_human(used_kb)}"
@@ -589,10 +589,10 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if action == "renew_volume":
         keyboard = [
-            [InlineKeyboardButton("1 GB", callback_data="add_1"), InlineKeyboardButton("5 GB", callback_data="add_5")],
-            [InlineKeyboardButton("10 GB", callback_data="add_10"), InlineKeyboardButton("20 GB", callback_data="add_20")],
-            [InlineKeyboardButton("35 GB", callback_data="add_35"), InlineKeyboardButton("40 GB", callback_data="add_40")],
-            [InlineKeyboardButton("55 GB", callback_data="add_55")],
+            [InlineKeyboardButton("1 GB", callback_data="add_gb_1"), InlineKeyboardButton("5 GB", callback_data="add_gb_5")],
+            [InlineKeyboardButton("10 GB", callback_data="add_gb_10"), InlineKeyboardButton("20 GB", callback_data="add_gb_20")],
+            [InlineKeyboardButton("35 GB", callback_data="add_gb_35"), InlineKeyboardButton("40 GB", callback_data="add_gb_40")],
+            [InlineKeyboardButton("55 GB", callback_data="add_gb_55")],
             [InlineKeyboardButton("✏️ حجم سفارشی", callback_data="add_custom")],
             [InlineKeyboardButton("⬅️ بازگشت", callback_data="extend_back")]
         ]
@@ -606,10 +606,8 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
 
     elif action == "renew_time":
         keyboard = [
-            # اگه بخوای ۷ روزه رو هم می‌تونم اینجا اضافه کنم
-            # [InlineKeyboardButton("7 روز", callback_data="time_7")],
-            [InlineKeyboardButton("1 ماهه", callback_data="time_30"), InlineKeyboardButton("2 ماهه", callback_data="time_60")],
-            [InlineKeyboardButton("3 ماهه", callback_data="time_90")],
+            [InlineKeyboardButton("1 ماهه", callback_data="add_days_30"), InlineKeyboardButton("2 ماهه", callback_data="add_days_60")],
+            [InlineKeyboardButton("3 ماهه", callback_data="add_days_90")],
             [InlineKeyboardButton("⬅️ بازگشت", callback_data="extend_back")]
         ]
         await query.edit_message_text(
@@ -634,6 +632,7 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await query.edit_message_text("گزینه نامعتبر است.")
         return ConversationHandler.END
+
         
 
 ###################
