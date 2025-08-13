@@ -1,5 +1,5 @@
 #این نسخه  فعلا باگ  داره ولی درحال اپدیته
-#cat > /root/sshmanagerbot7.py << 'EOF'
+#cat > /root/sshmanagerbot.py << 'EOF'
 #!/usr/bin/env python3
 # sshmanagerbot_fixed.py
 import os
