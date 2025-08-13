@@ -253,44 +253,44 @@ def get_sorted_users():
 
 # 📌 تابع ساخت صفحه گزارش
 def build_report_page(users, page):
-    start = page * 10
-    end = start + 10
+    start, end = page * 10, page * 10 + 10
     page_users = users[start:end]
     report_chunk = ""
     for username in page_users:
         limits_file = os.path.join(LIMITS_DIR, f"{username}.json")
-        limit_kb = 0
-        used_kb = 0
+        limit_kb = used_kb = 0
         expire_ts = None
         is_blocked = False
         block_reason = None
+
         if os.path.exists(limits_file):
             try:
                 with open(limits_file, "r") as f:
                     j = json.load(f)
                 if isinstance(j, dict):
                     limit_kb = safe_int(j.get("limit", 0))
-                    used_kb = safe_int(j.get("used", 0))
+                    used_kb  = safe_int(j.get("used", 0))
                     expire_ts = j.get("expire_timestamp")
                     is_blocked = bool(j.get("is_blocked", False))
                     block_reason = j.get("block_reason")
-                else:
-                    # skip non-dict content
-                    limit_kb = 0
-                    used_kb = 0
             except Exception:
                 pass
+
         if limit_kb > 0:
-            percent = (used_kb / limit_kb) * 100 if limit_kb > 0 else 0
-            usage_str = f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)} ({percent:.1f}%)"
+            pct = percent_used_kb(used_kb, limit_kb)
+            usage_str = f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)} ({pct:.1f}%)"
         else:
             usage_str = "♾ نامحدود"
+
         expire_str = datetime.fromtimestamp(expire_ts).strftime("%Y-%m-%d") if expire_ts else "—"
         status_str = "🔒" if is_blocked else "✅"
         if is_blocked and block_reason:
             status_str += f" ({block_reason})"
+
         report_chunk += f"👤 `{username}`\n📊 مصرف: {usage_str}\n⏳ انقضا: {expire_str}\nوضعیت: {status_str}\n\n"
+
     return report_chunk
+
 
 
 def random_str(length=10):
