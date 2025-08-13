@@ -111,29 +111,28 @@ def kb_to_human(kb):
 # 📌 تابع به‌روزرسانی مصرف لحظه‌ای (مثل log_user_traffic.py)
 
 def update_live_usage():
-    """به‌روزرسانی مصرف لحظه‌ای کاربران از iptables"""
+def update_live_usage():
+    """به‌روزرسانی مصرف لحظه‌ای کاربران از iptables + اعمال محدودیت در صورت عبور از سقف"""
 
     def parse_iptables_lines():
-        """خوندن داده‌های مصرف از iptables"""
         out = subprocess.getoutput("iptables -L SSH_USERS -v -n -x 2>/dev/null")
         result = {}
         for line in out.splitlines():
             line = line.strip()
             if not line or line.startswith(("Chain", "pkts", "target")):
                 continue
-            if "--uid-owner" not in line:
-                continue
-
             parts = line.split()
+            # تلاش برای گرفتن شمارنده‌ی بایت‌ها
             try:
                 bytes_counter = int(parts[1])
-            except ValueError:
-                # پیدا کردن اولین عدد معتبر
-                bytes_counter = next((int(tok) for tok in parts if tok.isdigit()), None)
-                if bytes_counter is None:
+            except Exception:
+                # fallback: اولین عدد معتبر در خط
+                nums = [int(tok) for tok in parts if tok.isdigit()]
+                if not nums:
                     continue
+                bytes_counter = nums[0]
 
-            # گرفتن UID
+            # استخراج UID از خط
             try:
                 toks = line.split()
                 if "--uid-owner" in toks:
@@ -148,17 +147,15 @@ def update_live_usage():
                 continue
         return result
 
-    # یکبار گرفتن همه UID → Username
+    # ساخت map همه‌ی uid→username
     def get_all_users_map():
         users_map = {}
         try:
             result = subprocess.run(['getent', 'passwd'], capture_output=True, text=True, check=True)
-            for line in result.stdout.strip().splitlines():
-                parts = line.split(':')
-                if len(parts) >= 3:
-                    username = parts[0]
-                    uid = parts[2]
-                    users_map[uid] = username
+            for ln in result.stdout.strip().splitlines():
+                p = ln.split(':')
+                if len(p) >= 3:
+                    users_map[p[2]] = p[0]
         except Exception:
             pass
         return users_map
@@ -186,6 +183,9 @@ def update_live_usage():
             data = {}
 
         used_kb = int(data.get("used", 0))
+        limit_kb = int(data.get("limit", 0))
+        is_blocked = bool(data.get("is_blocked", False))
+        block_reason = data.get("block_reason") or None
         last_bytes = int(data.get("last_iptables_bytes", 0))
 
         # مقداردهی اولیه
@@ -193,8 +193,7 @@ def update_live_usage():
             data["last_iptables_bytes"] = int(current_bytes)
             data["last_checked"] = now_ts
             try:
-                with open(limits_file, "w") as fw:
-                    json.dump(data, fw, indent=4)
+                atomic_write(limits_file, data)
             except Exception:
                 pass
             continue
@@ -212,11 +211,20 @@ def update_live_usage():
         data["last_iptables_bytes"] = int(current_bytes)
         data["last_checked"] = now_ts
 
+        # ✅ اعمال محدودیت: اگر از سقف گذشت و محدود بود، قفل کن
+        if limit_kb > 0 and used_kb >= limit_kb:
+            if not is_blocked or block_reason != "quota":
+                # قفل با اسکریپت استاندارد
+                lock_user_account(username, "quota")
+                data["is_blocked"] = True
+                data["block_reason"] = "quota"
+                data["alert_sent"] = True  # می‌تونی ازش برای اعلان یک‌باره استفاده کنی
+
         try:
-            with open(limits_file, "w") as fw:
-                json.dump(data, fw, indent=4)
+            atomic_write(limits_file, data)
         except Exception:
             pass
+
 
 # 📌 تابع مرتب‌سازی بر اساس زمان ساخت اکانت
 def get_sorted_users():
