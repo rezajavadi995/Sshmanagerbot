@@ -1273,7 +1273,7 @@ def run_bot():
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
-
+"""
     conv_extend = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_extend_user, pattern="^extend_user$")],
         states={
@@ -1284,6 +1284,43 @@ def run_bot():
         },
         fallbacks=[CommandHandler("cancel", cancel_conversation), CallbackQueryHandler(end_extend_handler, pattern="^end_extend$")],
     )
+
+"""
+
+    #####
+    conv_handler_extend = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.Regex(r'^(?i)تمدید اکانت$'), handle_extend_username)
+        ],
+        states={
+            ASK_RENEW_USERNAME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_extend_username)
+            ],
+            ASK_RENEW_ACTION: [
+                CallbackQueryHandler(handle_extend_action, pattern="^(renew_volume|renew_time|toggle_lock|extend_back)$")
+            ],
+            ASK_RENEW_VOLUME: [
+                CallbackQueryHandler(handle_extend_value, pattern="^add_gb_\d+$"),
+                CallbackQueryHandler(handle_extend_custom, pattern="^add_custom$")
+            ],
+            ASK_RENEW_TIME: [
+                CallbackQueryHandler(handle_extend_value, pattern="^add_days_\d+$")
+            ],
+            ASK_ANOTHER_RENEW: [
+                CallbackQueryHandler(handle_extend_action, pattern="^(renew_volume|renew_time)$"),
+                CallbackQueryHandler(lambda u, c: ConversationHandler.END, pattern="^end_extend$")
+            ],
+            ASK_CUSTOM_VOLUME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_extend_custom_value)
+            ]
+        },
+        fallbacks=[
+            CommandHandler("cancel", lambda u, c: ConversationHandler.END)
+        ],
+        name="extend_conv",
+        persistent=True
+    )
+
 
 
     conv_delete = ConversationHandler(
