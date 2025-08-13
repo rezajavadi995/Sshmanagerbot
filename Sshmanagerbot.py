@@ -446,29 +446,20 @@ async def handle_account_type(update: Update, context: ContextTypes.DEFAULT_TYPE
         return await ask_expire(update, context)
 
 async def handle_volume_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip().upper()
-    volume_gb = 0
-    volume_mb = 0
+    text = (update.message.text or "").strip()
     try:
-        if text.endswith("GB"):
-            volume_gb = float(text[:-2].strip())
-            volume_mb = int(volume_gb * 1024)
-        elif text.endswith("MB"):
-            volume_mb = int(float(text[:-2].strip()))
-        else:
-            volume_mb = int(float(text))
+        volume_kb = parse_size_to_kb(text)
     except Exception:
-        await update.message.reply_text("❌ حجم واردشده نامعتبر است. لطفاً مانند `30MB` یا `1.5GB` وارد کنید.")
+        await update.message.reply_text("❌ حجم نامعتبر است. مثال: 30MB یا 1.5GB")
         return ASK_VOLUME
 
-    if volume_mb <= 0:
-        await update.message.reply_text("❌ حجم واردشده باید بزرگتر از صفر باشد.")
+    if volume_kb <= 0:
+        await update.message.reply_text("❌ حجم باید بزرگتر از صفر باشد.")
         return ASK_VOLUME
 
-    # NEW: Store the volume in KB correctly
-    context.user_data["volume"] = volume_mb * 1024
-    
+    context.user_data["volume"] = volume_kb  # ذخیره بر حسب KB
     return await ask_expire(update, context)
+
 
 
 
@@ -479,8 +470,7 @@ async def ask_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caller = update.callback_query.message
     else:
         caller = update.message
-    # خط زیر حذف شد چون نام کاربری قبلاً در ask_account_type ذخیره شده است.
-    # context.user_data['username'] = context.user_data.get('username', caller.text.strip())
+    
     keyboard = [
         [InlineKeyboardButton("⌛️ یک ماهه", callback_data="expire_30d")],
         [InlineKeyboardButton("⏳️ دو ماهه", callback_data="expire_60d")],
