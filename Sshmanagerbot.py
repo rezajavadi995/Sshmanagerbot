@@ -111,7 +111,6 @@ def kb_to_human(kb):
 # 📌 تابع به‌روزرسانی مصرف لحظه‌ای (مثل log_user_traffic.py)
 
 def update_live_usage():
-def update_live_usage():
     """به‌روزرسانی مصرف لحظه‌ای کاربران از iptables + اعمال محدودیت در صورت عبور از سقف"""
 
     def parse_iptables_lines():
@@ -236,45 +235,59 @@ def get_sorted_users():
     return [u.split(":")[0] for u in users_sorted]
 
 # 📌 تابع ساخت صفحه گزارش
-def build_report_page(users, page):
-    start = page * 10
-    end = start + 10
-    page_users = users[start:end]
-    report_chunk = ""
-    for username in page_users:
-        limits_file = os.path.join(LIMITS_DIR, f"{username}.json")
-        limit_kb = 0
-        used_kb = 0
-        expire_ts = None
-        is_blocked = False
-        block_reason = None
-        if os.path.exists(limits_file):
+def build_report_page(users: list[str], page: int) -> str:
+    per_page = 10
+    total_pages = max(1, (len(users) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    start, end = page * per_page, page * per_page + per_page
+    slice_users = users[start:end]
+
+    lines = []
+    for username in slice_users:
+        limits_path = f"{LIMITS_DIR}/{username}.json"
+        is_locked = False
+        expire_txt = ""
+        usage_txt = "نامشخص"
+        status_emoji = "ℹ️"
+
+        # وضعیت قفل
+        try:
+            ps = subprocess.getoutput(f"passwd -S {username} 2>/dev/null").split()
+            is_locked = (len(ps) > 1 and ps[1] == "L")
+        except Exception:
+            is_locked = False
+
+        if os.path.exists(limits_path):
             try:
-                with open(limits_file, "r") as f:
-                    j = json.load(f)
-                if isinstance(j, dict):
-                    limit_kb = safe_int(j.get("limit", 0))
-                    used_kb = safe_int(j.get("used", 0))
-                    expire_ts = j.get("expire_timestamp")
-                    is_blocked = bool(j.get("is_blocked", False))
-                    block_reason = j.get("block_reason")
+                with open(limits_path, "r") as f:
+                    data = json.load(f)
+                used_kb = safe_int(data.get("used", 0))
+                limit_kb = safe_int(data.get("limit", 0))
+                pct = percent_used_kb(used_kb, limit_kb) if limit_kb > 0 else 0.0
+                usage_txt = (
+                    f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)} ({pct:.0f}%)"
+                    if limit_kb > 0 else f"{kb_to_human(used_kb)}"
+                )
+
+                exp_ts = safe_int(data.get("expire_timestamp", 0))
+                if exp_ts:
+                    days_left = int((datetime.fromtimestamp(exp_ts) - datetime.now()).total_seconds() // 86400)
+                    expire_txt = f" | ⏳ {days_left} روز مانده"
+
+                if limit_kb > 0:
+                    status_emoji = "🔴" if pct >= 100 else ("🟠" if pct >= 90 else "🟢")
                 else:
-                    # skip non-dict content
-                    limit_kb = 0
-                    used_kb = 0
+                    status_emoji = "🔵"  # نامحدود
+
             except Exception:
                 pass
-        if limit_kb > 0:
-            percent = (used_kb / limit_kb) * 100 if limit_kb > 0 else 0
-            usage_str = f"{kb_to_human(used_kb)} / {kb_to_human(limit_kb)} ({percent:.1f}%)"
-        else:
-            usage_str = "♾ نامحدود"
-        expire_str = datetime.fromtimestamp(expire_ts).strftime("%Y-%m-%d") if expire_ts else "—"
-        status_str = "🔒" if is_blocked else "✅"
-        if is_blocked and block_reason:
-            status_str += f" ({block_reason})"
-        report_chunk += f"👤 `{username}`\n📊 مصرف: {usage_str}\n⏳ انقضا: {expire_str}\nوضعیت: {status_str}\n\n"
-    return report_chunk
+
+        lock_txt = " | 🚫 مسدود" if is_locked else ""
+        lines.append(f"{status_emoji} `{username}` → {usage_txt}{expire_txt}{lock_txt}")
+
+    header = f"🧾 گزارش کاربران — صفحه {page + 1} از {total_pages}\n\n"
+    return header + ("\n".join(lines) if lines else "لیستی برای نمایش وجود ندارد.")
+
 
 
 def random_str(length=10):
