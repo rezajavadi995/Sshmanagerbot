@@ -97,8 +97,14 @@ UID_ACCEPT_RE = re.compile(
 )
 
 def main():
-    log("="*20)
-    log("اجرای log-user-traffic آغاز شد")
+    start_ts = time.time()
+    # قفل بین‌پردازه‌ای: هم‌زمان فقط یک نمونه اجرا شود
+    os.makedirs(os.path.dirname(LOCK_FILE), exist_ok=True)
+    with open(LOCK_FILE, "w") as lockf:
+        fcntl.flock(lockf, fcntl.LOCK_EX)
+
+        log("="*20)
+        log("اجرای log-user-traffic آغاز شد")
 
     # chain موجود است؟
     if subprocess.run([IPT, "-S", CHAIN], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0:
