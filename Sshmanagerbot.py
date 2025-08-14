@@ -133,119 +133,28 @@ def kb_to_human(kb: int) -> str:
         return f"{kb / 1024:.1f} MB"
     return f"{kb} KB"
 
-# 📌 تابع به‌روزرسانی مصرف لحظه‌ای (نسخه‌ی پایدار با iptables-save -c)
-def update_live_usage():
-    import subprocess, pwd, time, os, json
+####
 
-    def run(cmd):
-        return subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
-
-    def safe_int(x, default=0):
-        try:
-            return int(x)
-        except:
-            return default
-
-    def parse_save():
-        out = run(["iptables-save", "-c"])
-        res = {}
-        for ln in out.splitlines():
-            if "-A SSH_USERS " not in ln or "--uid-owner" not in ln:
-                continue
-            # bytes
-            bts = None
-            if " -c " in ln:
-                try:
-                    parts = ln.split()
-                    i = parts.index("-c")
-                    bts = safe_int(parts[i+2], None)  # -c pkts bytes
-                except:
-                    bts = None
-            if bts is None and "[" in ln and "]" in ln:
-                try:
-                    ib = ln.index("["); jb = ln.index("]", ib+1)
-                    kv = ln[ib+1:jb].split(":")  # pkts:bytes
-                    if len(kv) == 2:
-                        bts = safe_int(kv[1], None)
-                except:
-                    bts = None
-            if bts is None:
-                continue
-            # uid
-            uid = None
-            parts = ln.split()
-            for i, p in enumerate(parts):
-                if p == "--uid-owner" and i + 1 < len(parts):
-                    uid = safe_int(parts[i+1], None)
-                    break
-            if uid is not None:
-                res[uid] = bts
-        return res
-
-    def parse_list():
-        try:
-            out = run(["iptables", "-L", "SSH_USERS", "-v", "-n", "-x"])
-        except subprocess.CalledProcessError:
-            return {}
-        res = {}
-        for ln in out.splitlines():
-            sp = ln.split()
-            if len(sp) < 8:
-                continue
-            bts = safe_int(sp[1], None)
-            if bts is None:
-                continue
-            uid = None
-            if "--uid-owner" in sp:
-                i = sp.index("--uid-owner")
-                if i + 1 < len(sp):
-                    uid = safe_int(sp[i+1], None)
-            if uid is not None:
-                res[uid] = bts
-        return res
-
-    by_uid = parse_save()
-    if not by_uid:
-        by_uid = parse_list()
-
-    now = int(time.time())
-    for uid, cur_bytes in by_uid.items():
-        if uid < 1000:
-            continue
-        try:
-            uname = pwd.getpwuid(uid).pw_name
-        except KeyError:
-            continue
-        f = os.path.join(LIMITS_DIR, f"{uname}.json")
-        if not os.path.exists(f):
-            continue
-        try:
-            data = json.load(open(f))
-        except:
-            data = {}
-        data.setdefault("username", uname)
-        data.setdefault("type", "limited")
-        data.setdefault("limit", 0)
-        data.setdefault("used", 0)
-        data.setdefault("is_blocked", False)
-
-        last = data.get("last_iptables_bytes", None)
-        if last is None:
-            data["last_iptables_bytes"] = int(cur_bytes)
-            data["last_checked"] = now
-            json.dump(data, open(f, "w"), ensure_ascii=False, indent=2)
-            continue
-
-        delta = int(cur_bytes) - int(last)
-        if delta < 0:
-            delta = int(cur_bytes)
-
-        used_kb = safe_int(data.get("used", 0))
-        used_kb += int(delta / 1024)  # bytes→KB
-        data["used"] = used_kb
-        data["last_iptables_bytes"] = int(cur_bytes)
-        data["last_checked"] = now
-        json.dump(data, open(f, "w"), ensure_ascii=False, indent=2)
+# جایگزین کامل تابع در ربات — نسخه‌ی نهایی
+def update_live_usage(force_run: bool = True) -> None:
+    """
+    بروزرسانی زنده مصرف را به تنها منبع معتبر واگذار می‌کند:
+    /usr/local/bin/log_user_traffic.py
+    - از دوبار‌شماری جلوگیری می‌کند
+    - فقط ترافیک ACCEPT شمرده می‌شود
+    - نوشتن JSON اتمیک است
+    """
+    try:
+        
+        subprocess.run(["systemctl", "start", "log-user-traffic.service"], check=False)
+        subprocess.run(
+            ["/usr/bin/python3", "/usr/local/bin/log_user_traffic.py"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        log.exception("update_live_usage delegation failed")
 
 
 #  تابع مرتب‌سازی بر اساس زمان ساخت اکانت
