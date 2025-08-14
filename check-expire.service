@@ -1,7 +1,13 @@
-cat > /etc/systemd/system/check-expire.service << 'EOF' 
+# /etc/systemd/system/check-expire.service
+cat > /etc/systemd/system/check-expire.service << 'EOF'
 [Unit]
 Description=Check and disable expired users
+After=network.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/check_users_expire.py
+ExecStart=/usr/bin/python3 /usr/local/bin/check_users_expire.py
+
+[Install]
+WantedBy=multi-user.target
+EOF
