@@ -1,5 +1,5 @@
-# /etc/systemd/system/check-usage.timer
-cat > /etc/systemd/system/check-usage.timer << 'EOF'
+# /etc/systemd/system/check-user-usage.timer
+cat > /etc/systemd/system/check-user-usage.timer << 'EOF'
 [Unit]
 Description=Check SSH User Traffic Hourly
 
