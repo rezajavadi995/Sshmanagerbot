@@ -1,0 +1,15 @@
+cat > /etc/systemd/system/github_bot.service << 'EOF'
+[Unit]
+Description=GitHub File Fetcher Telegram Bot
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root/github_bot
+ExecStart=/usr/bin/python3 /root/github_bot/github_bot.py
+Restart=always
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
