@@ -19,7 +19,8 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
-from reporting_final import register_reporting_handlersregister_reporting_handlers(application)
+from reporting_final import register_reporting_handlers
+register_reporting_handlers(application)
 
 
 # ---------- Configuration (use environment variables) ----------
