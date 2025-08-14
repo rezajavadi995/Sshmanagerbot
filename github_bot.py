@@ -1,7 +1,11 @@
-cat > /root/github.py << 'EOF'
+#نسخه ۳
+cat > /root/github_bot/github_bot.py << 'EOF'
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes, ConversationHandler
+)
 from io import BytesIO
 
 # ========================
@@ -12,12 +16,18 @@ CHAT_ID = "8062924341"
 GITHUB_REPO = "rezajavadi995/Sshmanagerbot"
 
 # فایل‌هایی که در فایل نهایی گنجانده نشوند
-EXCLUDE_FILES = ["Sshmanagerbot.py", "example_ignore.py", "README.md", "updater_bot.py", "مسیر ها", "اجرای سکریپت راه اندازی کامل سرور.sh" ]  # می‌تونی فایل‌های خودت رو اضافه کنی
+EXCLUDE_FILES = ["Sshmanagerbot.py", "example_ignore.py", "README.md", 
+                 "updater_bot.py", "مسیر ها", 
+                 "اجرای سکریپت راه اندازی کامل سرور.sh"]
+
+# مرحله مکالمه افزودن فایل
+ADD_EXCLUDE = 1
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("دریافت فایل‌ها از گیت‌هاب", callback_data='fetch_files')],
-        [InlineKeyboardButton("نمایش فایل‌های استثنا", callback_data='show_exclude')]
+        [InlineKeyboardButton("نمایش فایل‌های استثنا", callback_data='show_exclude')],
+        [InlineKeyboardButton("افزودن فایل به استثنا", callback_data='add_exclude')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("سلام! یکی از گزینه‌ها را انتخاب کن:", reply_markup=reply_markup)
@@ -69,10 +79,39 @@ async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = "فایل‌های استثنا:\n" + "\n".join(EXCLUDE_FILES)
         await query.edit_message_text(message)
 
+    elif query.data == 'add_exclude':
+        await query.edit_message_text("نام فایل مورد نظر برای افزودن به استثنا را ارسال کن:")
+        return ADD_EXCLUDE
+
+async def add_exclude_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    file_name = update.message.text.strip()
+    if file_name in EXCLUDE_FILES:
+        await update.message.reply_text(f"{file_name} قبلاً در استثناها بود.")
+    else:
+        EXCLUDE_FILES.append(file_name)
+        await update.message.reply_text(f"{file_name} به لیست استثنا اضافه شد!")
+
+    return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("عملیات لغو شد.")
+    return ConversationHandler.END
+
 app = ApplicationBuilder().token(TOKEN).build()
 
+# مکالمه افزودن فایل
+conv_handler = ConversationHandler(
+    entry_points=[CallbackQueryHandler(handle_button, pattern='add_exclude')],
+    states={
+        ADD_EXCLUDE: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_exclude_file)]
+    },
+    fallbacks=[CommandHandler('cancel', cancel)]
+)
+
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(handle_button))
+app.add_handler(CallbackQueryHandler(handle_button, pattern='^(fetch_files|show_exclude)$'))
+app.add_handler(conv_handler)
 
 print("ربات آماده است.")
 app.run_polling()
+EOF
