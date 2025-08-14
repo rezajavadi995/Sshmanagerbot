@@ -1,5 +1,6 @@
-cat > /etc/systemd/system/fix-iptables.service << 'EOF'
+
 # /etc/systemd/system/fix-iptables.service
+cat > /etc/systemd/system/fix-iptables.service << 'EOF'
 [Unit]
 Description=Fix iptables rules for SSH users
 After=network.target
@@ -10,8 +11,8 @@ ExecStart=/bin/bash /root/fix-iptables.sh
 
 [Install]
 WantedBy=multi-user.target
-
 EOF
+
 
 
 ###########
