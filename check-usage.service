@@ -1,6 +1,10 @@
-cat > /etc/systemd/system/check-usage.service << 'EOF' 
+# /etc/systemd/system/check-usage.service
+cat > /etc/systemd/system/check-usage.service << 'EOF'
 [Unit]
 Description=Run check_user_usage.py script
+After=network.target
+
 [Service]
-ExecStart=/usr/local/bin/check_user_usage.py
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/bin/check_user_usage.py
 EOF
