@@ -6,7 +6,7 @@ Description=Check SSH User Traffic Hourly
 [Timer]
 OnBootSec=5min
 OnUnitActiveSec=1h
-Unit=check-usage.service
+Unit=check-user-usage.service
 
 [Install]
 WantedBy=timers.target
