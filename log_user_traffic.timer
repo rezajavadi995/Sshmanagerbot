@@ -16,18 +16,10 @@ WantedBy=timers.target
 
 EOF
 ######################################
-systemctl daemon-reexec
 systemctl daemon-reload
-
-# بعد از نصب اینارو بزن
-
-
-
-sudo systemctl start log-user-traffic.timer
-sudo systemctl status log-user-traffic.timer
-
-
 systemctl enable --now log-user-traffic.timer
+systemctl start log-user-traffic.service
+systemctl status log-user-traffic.service --no-pager -l
 
 
 
