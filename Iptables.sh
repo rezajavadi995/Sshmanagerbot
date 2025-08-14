@@ -6,26 +6,38 @@ set -euo pipefail
 
 echo "[+] Fixing iptables for SSH per-UID accounting..."
 
-
 CHAIN="SSH_USERS"
 LIMITS_DIR="/etc/sshmanager/limits"
 
-# find iptables binary (legacy/nft) + -w flag if supported
-IPT="iptables"
-if command -v iptables-legacy >/dev/null 2>&1; then IPT="iptables-legacy"; fi
-if command -v iptables-nft >/dev/null 2>&1; then IPT="iptables-nft"; fi
-IPT_W="$IPT"
-($IPT -w -L >/dev/null 2>&1) && IPT_W="$IPT -w"
+# انتخاب iptables
+if command -v iptables-legacy >/dev/null 2>&1; then
+  IPT="iptables-legacy"
+elif command -v iptables-nft >/dev/null 2>&1; then
+  IPT="iptables-nft"
+else
+  IPT="iptables"
+fi
 
-# create chain if missing
+# بررسی پشتیبانی -w (بدون گیر کردن)
+if $IPT -L >/dev/null 2>&1; then
+  if $IPT -w -L >/dev/null 2>&1; then
+    IPT_W="$IPT -w"
+  else
+    IPT_W="$IPT"
+  fi
+else
+  echo "❌ iptables command not found!"
+  exit 1
+fi
+
+# ساخت chain اگر وجود نداشت
 $IPT_W -N "$CHAIN" 2>/dev/null || true
 
-# ensure OUTPUT jumps to SSH_USERS at line 1 (move if not first)
+# تضمین اینکه OUTPUT خط ۱ -> CHAIN
 if $IPT_W -C OUTPUT -j "$CHAIN" 2>/dev/null; then
-  # already exists, but ensure it's first
-  FIRST_TARGET=$($IPT_W -L OUTPUT --line-numbers -n | awk 'NR==3{print $3}')
-  if [[ "${FIRST_TARGET:-}" != "$CHAIN" ]]; then
-    # delete existing jump(s) then insert as #1
+  # اگر پرش اول نیست، همه پرش‌های قبلی را حذف کن و در خط ۱ بگذار
+  first_target="$($IPT_W -L OUTPUT --line-numbers -n | awk 'NR==3{print $3}')"
+  if [[ "${first_target:-}" != "$CHAIN" ]]; then
     while $IPT_W -C OUTPUT -j "$CHAIN" 2>/dev/null; do
       $IPT_W -D OUTPUT -j "$CHAIN" || true
     done
@@ -35,15 +47,11 @@ else
   $IPT_W -I OUTPUT 1 -j "$CHAIN"
 fi
 
-# snapshot old rules (برای حفظ شمارنده‌ها بعداً بازنمی‌سازیم؛ flush می‌کنیم)
+# پاکسازی رول‌های قبلی CHAIN
 $IPT_W -F "$CHAIN"
 
-# جمع‌آوری لیست UIDها:
-# 1) همه‌ی یوزرهای واقعی (UID>=1000 و not nobody)
-# 2) یوزرنیم‌های موجود در LIMITS_DIR (اگر فایل json دارند و در سیستم هم یوزر تعریف شده)
+# جمع‌آوری UIDها
 declare -A WANT_UIDS
-
-# from passwd
 while IFS=: read -r user _ uid _; do
   [[ -n "$user" && "$uid" =~ ^[0-9]+$ ]] || continue
   if (( uid >= 1000 )) && [[ "$user" != "nobody" ]]; then
@@ -51,7 +59,6 @@ while IFS=: read -r user _ uid _; do
   fi
 done < <(getent passwd)
 
-# from limits json
 if [[ -d "$LIMITS_DIR" ]]; then
   for f in "$LIMITS_DIR"/*.json; do
     [[ -f "$f" ]] || continue
@@ -65,18 +72,18 @@ if [[ -d "$LIMITS_DIR" ]]; then
   done
 fi
 
-# افزودن رول‌های owner به ترتیب UID برای قابلیت دیباگ بهتر
+# اضافه کردن دقیقاً یک رول ACCEPT برای هر UID
 for uid in $(printf "%s\n" "${!WANT_UIDS[@]}" | sort -n); do
   $IPT_W -A "$CHAIN" -m owner --uid-owner "$uid" -j ACCEPT
 done
 
-# گزارش کوتاه
 echo "[i] OUTPUT head:"
 $IPT_W -L OUTPUT -v -n --line-numbers | sed -n '1,5p'
 echo "[i] ${CHAIN} head:"
 $IPT_W -L "$CHAIN" -v -n -x | sed -n '1,12p'
 
 echo "[✓] iptables fixed."
+
 
 EOF
 
