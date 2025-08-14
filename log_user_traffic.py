@@ -1,5 +1,6 @@
 
 #cat > /usr/local/bin/log_user_traffic.py << 'EOF'
+
 # /usr/local/bin/log_user_traffic.py
 #!/usr/bin/env python3
 import json, os, re, subprocess, time, pwd, tempfile, shutil
