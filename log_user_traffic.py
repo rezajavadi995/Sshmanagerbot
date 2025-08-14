@@ -4,6 +4,9 @@
 # /usr/local/bin/log_user_traffic.py
 #!/usr/bin/env python3
 import json, os, re, subprocess, time, pwd, tempfile, shutil
+import fcntl
+LOCK_FILE = "/run/log-user-traffic.lock"
+
 
 LIMITS_DIR = "/etc/sshmanager/limits"
 DEBUG_DIR  = "/var/log/sshmanager"
