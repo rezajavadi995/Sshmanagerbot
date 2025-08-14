@@ -174,4 +174,6 @@ if __name__ == '__main__':
     rc = main(force=args.force, backup=args.backup)
     raise SystemExit(rc)
 PY
-sudo chmod +x /usr/local/bin/init_last_iptables.py
+
+# sudo chmod +x /usr/local/bin/init_last_iptables.py
+# sudo /usr/bin/python3 /usr/local/bin/init_last_iptables.py  اجرا 
