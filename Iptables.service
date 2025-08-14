@@ -10,6 +10,9 @@ Wants=network-online.target
 Type=oneshot
 ExecStart=/bin/bash /root/fix-iptables.sh
 
+[Install]
+WantedBy=multi-user.target
+
 EOF
 
 
