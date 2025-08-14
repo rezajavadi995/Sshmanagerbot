@@ -1,5 +1,5 @@
 # /etc/systemd/system/check-usage.service
-cat > /etc/systemd/system/check-usage.service << 'EOF'
+cat > /etc/systemd/system/check-user-usage.service << 'EOF'
 [Unit]
 Description=Run check_user_usage.py script
 After=network.target
