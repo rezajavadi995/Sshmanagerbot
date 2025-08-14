@@ -6,7 +6,7 @@ set -euo pipefail
 
 echo "[+] Fixing iptables for SSH per-UID accounting..."
 
-# --- config ---
+
 CHAIN="SSH_USERS"
 LIMITS_DIR="/etc/sshmanager/limits"
 
