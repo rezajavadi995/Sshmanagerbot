@@ -3,7 +3,6 @@ cat > /etc/systemd/system/log-user-traffic.service << 'EOF'
 
 [Unit]
 Description=Log SSH Users Traffic into limits JSON
-Wants=log-user-traffic.timer
 
 [Service]
 Type=oneshot
@@ -14,7 +13,5 @@ Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 
-[Install]
-WantedBy=multi-user.target
 
 EOF
