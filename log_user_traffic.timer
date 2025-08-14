@@ -1,6 +1,4 @@
-#after buy server: 
-
-
+## /etc/systemd/system/log-user-traffic.timer
 cat > /etc/systemd/system/log-user-traffic.timer << 'EOF'
 [Unit]
 Description=Run Traffic Logger Every 5 Minutes
@@ -8,11 +6,11 @@ Description=Run Traffic Logger Every 5 Minutes
 [Timer]
 OnBootSec=1min
 OnUnitActiveSec=5min
+Unit=log-user-traffic.service
 
 [Install]
 WantedBy=timers.target
 EOF
-
 ######################################
 systemctl daemon-reexec
 systemctl daemon-reload
