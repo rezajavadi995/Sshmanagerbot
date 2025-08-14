@@ -1,14 +1,10 @@
-#after buy server: 
-
-
+# /etc/systemd/system/log-user-traffic.service
 cat > /etc/systemd/system/log-user-traffic.service << 'EOF'
 [Unit]
 Description=Log SSH Users Traffic into limits JSON
+After=network.target
 
 [Service]
-Type=simple
+Type=oneshot
 ExecStart=/usr/bin/python3 /usr/local/bin/log_user_traffic.py
-Restart=on-failure
-StandardOutput=append:/var/log/user-traffic.log
-StandardError=append:/var/log/user-traffic-error.log
 EOF
