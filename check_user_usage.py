@@ -1,32 +1,22 @@
-#هشدار مصرف (بررسی ساعتی و پیام به ادمین)
-
-# ایده کلی:
-
-#هر ساعت، اسکریپتی اجرا بشه که:
-
-#فایل‌های /etc/sshmanager/limits/*.json رو بخونه
-
-#اگر used بیش از ۹۰٪ limit بود → پیام هشدار به ادمین بفرسته (با bot)
-
-#مراحل زیر رو دنبال کن
-
-#########################################
-
-#ساخت فایل اسکریپت بررسی مصرف
-
+# /usr/local/bin/check_user_usage.py
 #cat > /usr/local/bin/check_user_usage.py << 'EOF'
 #!/usr/bin/env python3
-import os, json
-import requests
+# -*- coding: utf-8 -*-
+import os, json, requests
 from datetime import datetime
-from pathlib import Path
 
-# NEW: Define all required variables
 LIMITS_DIR = "/etc/sshmanager/limits"
 BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
 ADMIN_ID = "8062924341"
-NOLOGIN_PATH = "/usr/sbin/nologin"
 
+def safe_int(v, default=0):
+    try:
+        return int(v)
+    except Exception:
+        try:
+            return int(float(v))
+        except Exception:
+            return default
 
 def send_alert(username, percent):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -35,50 +25,45 @@ def send_alert(username, percent):
         f"📊 میزان مصرف: {percent:.0f}%\n"
         f"🕒 زمان بررسی: {now}"
     )
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": ADMIN_ID, "text": msg, "parse_mode": "Markdown"})
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            data={"chat_id": ADMIN_ID, "text": msg, "parse_mode": "Markdown"},
+            timeout=5
+        )
+    except Exception:
+        pass
 
-for file in os.listdir(LIMITS_DIR):
-    if file.endswith(".json"):
-        path = os.path.join(LIMITS_DIR, file)
-        with open(path) as f:
-            data = json.load(f)
-            
-            # New check: Skip if user is blocked
-            if data.get("is_blocked", False):
-                continue
-            
-            used = int(data.get("used", 0))
-            limit = int(data.get("limit", 1))  # پیش‌فرض برای جلوگیری از تقسیم بر صفر
-            percent = (used / limit) * 100
-            
-            if percent >= 90 and not data.get("alert_sent", False):
-                username = file.replace(".json", "")
-                send_alert(username, percent)
-                
-                # Set alert_sent to True ONLY if alert is sent
-                data["alert_sent"] = True
-                with open(path, "w") as fw:
-                    json.dump(data, fw, indent=4)
-            # NEW: If percent is below 90, reset alert_sent flag
-            elif percent < 90 and data.get("alert_sent", False):
-                data["alert_sent"] = False
-                with open(path, "w") as fw:
-                    json.dump(data, fw, indent=4)
+def main():
+    if not os.path.isdir(LIMITS_DIR):
+        return
+    for fn in os.listdir(LIMITS_DIR):
+        if not fn.endswith(".json"): continue
+        path = os.path.join(LIMITS_DIR, fn)
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+        except Exception:
+            continue
 
+        if data.get("is_blocked", False):
+            # در حالت قفل‌شده، هشدار نیاز نیست
+            continue
+
+        used = safe_int(data.get("used", 0))
+        limit = safe_int(data.get("limit", 0))
+        percent = (used / limit * 100) if limit > 0 else 0
+
+        if limit > 0 and percent >= 90 and not data.get("alert_sent", False):
+            send_alert(fn[:-5], percent)
+            data["alert_sent"] = True
+            try: open(path, "w").write(json.dumps(data, indent=4, ensure_ascii=False))
+            except Exception: pass
+        elif percent < 90 and data.get("alert_sent", False):
+            data["alert_sent"] = False
+            try: open(path, "w").write(json.dumps(data, indent=4, ensure_ascii=False))
+            except Exception: pass
+
+if __name__ == "__main__":
+    main()
 #EOF
-
-
-#chmod +x /usr/local/bin/check_user_usage.py
-
-###################################
-
-
-
-
-
-#سپس فعال‌سازی:
-
-#systemctl daemon-reexec
-#systemctl daemon-reload
-#systemctl enable --now check-usage.timer
