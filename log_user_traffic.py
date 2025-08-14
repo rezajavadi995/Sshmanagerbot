@@ -191,6 +191,6 @@ def main():
 if __name__ == "__main__":
     main()
 
-EOF
+#EOF
 
 #chmod +x /usr/local/bin/log_user_traffic.py
