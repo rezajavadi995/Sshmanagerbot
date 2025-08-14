@@ -20,8 +20,6 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
 from reporting_final import register_reporting_handlers
-register_reporting_handlers(application)
-
 
 # ---------- Configuration (use environment variables) ----------
 BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
@@ -30,8 +28,6 @@ PORT_PUBLIC = 443
 DOMAIN = "ssh.ultraspeed.shop"
 NOLOGIN_PATH = "/usr/sbin/nologin"
 FIX_IPTABLES_SCRIPT = "/root/fix-iptables.sh"
-
-#new
 LIMITS_DIR = "/etc/sshmanager/limits"
 
 # ensure directories
@@ -50,6 +46,10 @@ ASK_ANOTHER_RENEW = 9
 log = logging.getLogger("sshmanager")
 logging.basicConfig(level=logging.INFO)
 LOCK_SCRIPT = "/root/sshmanager/lock_user.py"
+# ---------- Build Application ----------
+application = ApplicationBuilder().token(BOT_TOKEN).build()
+# ---------- Register Reporting Handlers ----------
+register_reporting_handlers(application)
 
 #منو
 main_menu_keyboard = InlineKeyboardMarkup([
@@ -245,7 +245,7 @@ def update_live_usage():
         except Exception:
             pass
 
-# 📌 تابع مرتب‌سازی بر اساس زمان ساخت اکانت
+#  تابع مرتب‌سازی بر اساس زمان ساخت اکانت
 def get_sorted_users():
     users_info = subprocess.getoutput(
         "getent passwd | awk -F: '$3 >= 1000 && $1 != \"nobody\" {print $1\":\"$3}'"
@@ -254,7 +254,7 @@ def get_sorted_users():
     users_sorted = sorted(users_info, key=lambda x: int(x.split(":")[1]))
     return [u.split(":")[0] for u in users_sorted]
 
-# 📌 تابع ساخت صفحه گزارش
+#  تابع ساخت صفحه گزارش
 def build_report_page(users, page):
     start, end = page * 10, page * 10 + 10
     page_users = users[start:end]
@@ -332,12 +332,12 @@ def fix_iptables():
 
 def format_config(username, password, expire_str):
     return f"""مشخصات اتصال:
-✅️ Host: {DOMAIN}
-✅️ Port: {PORT_PUBLIC}
-✅️ Username: {username}
-✅️ Password: {password}
-✅️ SNI: {DOMAIN}
-✅️ TLS: 1.2
+🚀 Host: {DOMAIN}
+🛸 Port: {PORT_PUBLIC}
+👤 Username: {username}
+🔑 Password: {password}
+🌐 SNI: {DOMAIN}
+🗺 TLS: 1.2
 
 ⏳ این اکانت تا {expire_str} معتبر است."""
 
