@@ -19,6 +19,9 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
+from reporting_final import register_reporting_handlers
+register_reporting_handlers(application)
+
 
 # ---------- Configuration (use environment variables) ----------
 BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
