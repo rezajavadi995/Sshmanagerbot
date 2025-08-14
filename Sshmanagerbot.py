@@ -133,117 +133,120 @@ def kb_to_human(kb: int) -> str:
         return f"{kb / 1024:.1f} MB"
     return f"{kb} KB"
 
-
-
-# 📌 تابع به‌روزرسانی مصرف لحظه‌ای (مثل log_user_traffic.py)
-
+# 📌 تابع به‌روزرسانی مصرف لحظه‌ای (نسخه‌ی پایدار با iptables-save -c)
 def update_live_usage():
-    """به‌روزرسانی مصرف لحظه‌ای کاربران از iptables"""
+    import subprocess, pwd, time, os, json
 
-    def parse_iptables_lines():
-        """خوندن داده‌های مصرف از iptables"""
-        out = subprocess.getoutput("iptables -L SSH_USERS -v -n -x 2>/dev/null")
-        result = {}
-        for line in out.splitlines():
-            line = line.strip()
-            if not line or line.startswith(("Chain", "pkts", "target")):
-                continue
-            if "--uid-owner" not in line:
-                continue
+    def run(cmd):
+        return subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
 
-            parts = line.split()
-            try:
-                bytes_counter = int(parts[1])
-            except ValueError:
-                # پیدا کردن اولین عدد معتبر
-                bytes_counter = next((int(tok) for tok in parts if tok.isdigit()), None)
-                if bytes_counter is None:
-                    continue
-
-            # گرفتن UID
-            try:
-                toks = line.split()
-                if "--uid-owner" in toks:
-                    uid = toks[toks.index("--uid-owner") + 1]
-                else:
-                    import re
-                    m = re.search(r"--uid-owner\s+(\d+)", line)
-                    uid = m.group(1) if m else None
-                if uid:
-                    result[uid] = bytes_counter
-            except Exception:
-                continue
-        return result
-
-    # یکبار گرفتن همه UID → Username
-    def get_all_users_map():
-        users_map = {}
+    def safe_int(x, default=0):
         try:
-            result = subprocess.run(['getent', 'passwd'], capture_output=True, text=True, check=True)
-            for line in result.stdout.strip().splitlines():
-                parts = line.split(':')
-                if len(parts) >= 3:
-                    username = parts[0]
-                    uid = parts[2]
-                    users_map[uid] = username
-        except Exception:
-            pass
-        return users_map
+            return int(x)
+        except:
+            return default
 
-    ipt_map = parse_iptables_lines()
-    if not ipt_map:
-        return
+    def parse_save():
+        out = run(["iptables-save", "-c"])
+        res = {}
+        for ln in out.splitlines():
+            if "-A SSH_USERS " not in ln or "--uid-owner" not in ln:
+                continue
+            # bytes
+            bts = None
+            if " -c " in ln:
+                try:
+                    parts = ln.split()
+                    i = parts.index("-c")
+                    bts = safe_int(parts[i+2], None)  # -c pkts bytes
+                except:
+                    bts = None
+            if bts is None and "[" in ln and "]" in ln:
+                try:
+                    ib = ln.index("["); jb = ln.index("]", ib+1)
+                    kv = ln[ib+1:jb].split(":")  # pkts:bytes
+                    if len(kv) == 2:
+                        bts = safe_int(kv[1], None)
+                except:
+                    bts = None
+            if bts is None:
+                continue
+            # uid
+            uid = None
+            parts = ln.split()
+            for i, p in enumerate(parts):
+                if p == "--uid-owner" and i + 1 < len(parts):
+                    uid = safe_int(parts[i+1], None)
+                    break
+            if uid is not None:
+                res[uid] = bts
+        return res
 
-    users_map = get_all_users_map()
-    now_ts = int(datetime.now().timestamp())
-
-    for uid, current_bytes in ipt_map.items():
-        username = users_map.get(uid)
-        if not username:
-            continue
-
-        limits_file = os.path.join(LIMITS_DIR, f"{username}.json")
-        if not os.path.exists(limits_file):
-            continue
-
+    def parse_list():
         try:
-            with open(limits_file, "r") as f:
-                data = json.load(f)
-        except Exception:
+            out = run(["iptables", "-L", "SSH_USERS", "-v", "-n", "-x"])
+        except subprocess.CalledProcessError:
+            return {}
+        res = {}
+        for ln in out.splitlines():
+            sp = ln.split()
+            if len(sp) < 8:
+                continue
+            bts = safe_int(sp[1], None)
+            if bts is None:
+                continue
+            uid = None
+            if "--uid-owner" in sp:
+                i = sp.index("--uid-owner")
+                if i + 1 < len(sp):
+                    uid = safe_int(sp[i+1], None)
+            if uid is not None:
+                res[uid] = bts
+        return res
+
+    by_uid = parse_save()
+    if not by_uid:
+        by_uid = parse_list()
+
+    now = int(time.time())
+    for uid, cur_bytes in by_uid.items():
+        if uid < 1000:
+            continue
+        try:
+            uname = pwd.getpwuid(uid).pw_name
+        except KeyError:
+            continue
+        f = os.path.join(LIMITS_DIR, f"{uname}.json")
+        if not os.path.exists(f):
+            continue
+        try:
+            data = json.load(open(f))
+        except:
             data = {}
+        data.setdefault("username", uname)
+        data.setdefault("type", "limited")
+        data.setdefault("limit", 0)
+        data.setdefault("used", 0)
+        data.setdefault("is_blocked", False)
 
-        used_kb = int(data.get("used", 0))
-        last_bytes = int(data.get("last_iptables_bytes", 0))
-
-        # مقداردهی اولیه
-        if last_bytes == 0 and not data.get("last_checked"):
-            data["last_iptables_bytes"] = int(current_bytes)
-            data["last_checked"] = now_ts
-            try:
-                with open(limits_file, "w") as fw:
-                    json.dump(data, fw, indent=4)
-            except Exception:
-                pass
+        last = data.get("last_iptables_bytes", None)
+        if last is None:
+            data["last_iptables_bytes"] = int(cur_bytes)
+            data["last_checked"] = now
+            json.dump(data, open(f, "w"), ensure_ascii=False, indent=2)
             continue
 
-        # محاسبه مصرف جدید
-        delta_bytes = current_bytes - last_bytes
-        if delta_bytes < 0:  # ریست شمارنده
-            delta_bytes = current_bytes
+        delta = int(cur_bytes) - int(last)
+        if delta < 0:
+            delta = int(cur_bytes)
 
-        delta_kb = int(delta_bytes / 1024)
-        if delta_kb > 0:
-            used_kb += delta_kb
-            data["used"] = used_kb
+        used_kb = safe_int(data.get("used", 0))
+        used_kb += int(delta / 1024)  # bytes→KB
+        data["used"] = used_kb
+        data["last_iptables_bytes"] = int(cur_bytes)
+        data["last_checked"] = now
+        json.dump(data, open(f, "w"), ensure_ascii=False, indent=2)
 
-        data["last_iptables_bytes"] = int(current_bytes)
-        data["last_checked"] = now_ts
-
-        try:
-            with open(limits_file, "w") as fw:
-                json.dump(data, fw, indent=4)
-        except Exception:
-            pass
 
 #  تابع مرتب‌سازی بر اساس زمان ساخت اکانت
 def get_sorted_users():
