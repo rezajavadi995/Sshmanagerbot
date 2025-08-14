@@ -1,157 +1,196 @@
-# /usr/local/bin/log_user_traffic.py
+
 #cat > /usr/local/bin/log_user_traffic.py << 'EOF'
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-import subprocess, json, os, re
-from datetime import datetime
-import requests
+# /usr/local/bin/log_user_traffic.py
+import os, json, pwd, subprocess, time, tempfile, shutil
 
 LIMITS_DIR = "/etc/sshmanager/limits"
-LOCK_SCRIPT = "/root/sshmanager/lock_user.py"
-BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
-ADMIN_ID = "8062924341"
-LOG_FILE = "/var/log/sshmanager-traffic.log"
+CHAIN_NAME = "SSH_USERS"
 
-def safe_int(v, default=0):
-    try: return int(v)
-    except Exception:
-        try: return int(float(v))
-        except Exception: return default
+os.makedirs(LIMITS_DIR, exist_ok=True)
 
-def send_telegram_message(text):
+def run(cmd):
+    return subprocess.check_output(cmd, text=True, stderr=subprocess.DEVNULL).strip()
+
+def safe_int(x, default=0):
     try:
-        requests.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            data={"chat_id": ADMIN_ID, "text": text, "parse_mode": "Markdown"},
-            timeout=5
-        )
-    except Exception as e:
-        with open(LOG_FILE, "a") as logf:
-            logf.write(f"{datetime.now().isoformat()} [ارسال پیام خطا] {str(e)}\n")
+        return int(x)
+    except:
+        return default
 
-def atomic_write(path, data):
-    tmp = f"{path}.tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+def parse_iptables_save_counters():
+    """
+    تلاش ۱: iptables-save -c
+    - برخی نسخه‌ها شکل '-c pkts bytes' دارند.
+    - برخی دیگر شکل '[pkts:bytes]' دارند.
+    خروجی: dict {uid:int -> bytes:int}
+    """
+    out = run(["iptables-save", "-c"])
+    by_uid = {}
+    for ln in out.splitlines():
+        if f"-A {CHAIN_NAME} " not in ln:
+            continue
+        if "--uid-owner" not in ln:
+            continue
+
+        # استخراج bytes از دو حالت
+        bytes_val = None
+
+        # حالت 1: '-c pkts bytes'
+        if " -c " in ln:
+            try:
+                # ... -c <pkts> <bytes> ...
+                parts = ln.split()
+                ci = parts.index("-c")
+                pkts = safe_int(parts[ci+1])
+                bts  = safe_int(parts[ci+2])
+                bytes_val = bts
+            except Exception:
+                bytes_val = None
+
+        # حالت 2: '[pkts:bytes]'
+        if bytes_val is None and "[" in ln and "]" in ln:
+            try:
+                ib = ln.index("[")
+                jb = ln.index("]", ib+1)
+                pkts_bytes = ln[ib+1:jb]  # "pkts:bytes"
+                pb = pkts_bytes.split(":")
+                if len(pb) == 2:
+                    bytes_val = safe_int(pb[1])
+            except Exception:
+                bytes_val = None
+
+        if bytes_val is None:
+            continue
+
+        # استخراج UID
+        uid = None
+        parts = ln.split()
+        for i, p in enumerate(parts):
+            if p == "--uid-owner" and i + 1 < len(parts):
+                uid = safe_int(parts[i+1], None)
+                break
+        if uid is None:
+            # برخی نسخه‌ها 'owner UID match' دارند؛ fallback
+            if "owner UID match" in ln:
+                # تلاش بدوی: آخرین عدد را UID فرض می‌کنیم
+                nums = [safe_int(tok, None) for tok in ln.replace(":", " ").split() if tok.isdigit()]
+                uid = nums[-1] if nums else None
+
+        if uid is not None:
+            by_uid[uid] = bytes_val
+    return by_uid
+
+def parse_iptables_list_counters():
+    """
+    تلاش ۲: iptables -L CHAIN -v -n -x
+    ستون‌ها: pkts bytes target prot opt in out source destination ...
+    """
+    try:
+        out = run(["iptables", "-L", CHAIN_NAME, "-v", "-n", "-x"])
+    except subprocess.CalledProcessError:
+        return {}
+    by_uid = {}
+    for ln in out.splitlines():
+        parts = ln.split()
+        if len(parts) < 8:
+            continue
+        # دومین ستون bytes است
+        bts = safe_int(parts[1], None)
+        if bts is None:
+            continue
+        # UID را پیدا کن
+        uid = None
+        if "--uid-owner" in parts:
+            i = parts.index("--uid-owner")
+            if i + 1 < len(parts):
+                uid = safe_int(parts[i+1], None)
+        elif "owner" in parts and "UID" in parts and "match" in parts:
+            # برخی ساختارها این‌طوری نشان می‌دهند
+            for tok in parts[::-1]:
+                if tok.isdigit():
+                    uid = safe_int(tok, None)
+                    break
+        if uid is not None:
+            by_uid[uid] = bts
+    return by_uid
+
+def iptables_bytes_by_uid():
+    by_uid = parse_iptables_save_counters()
+    if not by_uid:
+        by_uid = parse_iptables_list_counters()
+    return by_uid
+
+def username_by_uid(uid: int):
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return None
+
+def atomic_dump_json(path, data):
+    d = json.dumps(data, ensure_ascii=False, indent=2)
+    dirn = os.path.dirname(path)
+    os.makedirs(dirn, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=dirn)
+    with os.fdopen(fd, "w") as f:
+        f.write(d)
     os.replace(tmp, path)
 
-def parse_iptables_lines():
-    out = subprocess.getoutput("iptables -L SSH_USERS -v -n -x 2>/dev/null")
-    result = {}
-    for line in out.splitlines():
-        line = line.strip()
-        if not line or line.startswith(("Chain", "pkts", "target")):
-            continue
-        if "--uid-owner" not in line:
-            continue
-
-        # bytes از ستون دوم (فرمت -x)
-        parts = line.split()
-        bytes_counter = None
-        if len(parts) > 1:
-            try:
-                bytes_counter = int(parts[1])
-            except Exception:
-                bytes_counter = None
-        if bytes_counter is None:
-            m = re.search(r"\b(\d+)\b", line)
-            if m: bytes_counter = safe_int(m.group(1), None)
-        if bytes_counter is None:
-            continue
-
-        # UID
-        try:
-            toks = line.split()
-            if "--uid-owner" in toks:
-                uid = toks[toks.index("--uid-owner") + 1]
-            else:
-                m = re.search(r"--uid-owner\s+(\d+)", line)
-                uid = m.group(1) if m else None
-            if uid:
-                result[uid] = bytes_counter
-        except Exception:
-            continue
-    return result
-
 def main():
-    if not os.path.isdir(LIMITS_DIR):
-        return
+    by_uid = iptables_bytes_by_uid()
+    now = int(time.time())
 
-    ipt_map = parse_iptables_lines()
-    now_ts = int(datetime.now().timestamp())
-
-    for uid, current_bytes in ipt_map.items():
-        username = subprocess.getoutput(f"getent passwd {uid} | cut -d: -f1").strip()
-        if not username:
+    # فقط برای UID های واقعی سیستم (>=1000 معمولاً)
+    for uid, cur_bytes in by_uid.items():
+        if uid < 1000:
+            continue
+        uname = username_by_uid(uid)
+        if not uname:
             continue
 
-        limits_file = os.path.join(LIMITS_DIR, f"{username}.json")
-        if not os.path.exists(limits_file):
-            # اگر فایل وجود ندارد، ایجادش نکن—مطابق ساختار فعلی‌ات
+        fpath = os.path.join(LIMITS_DIR, f"{uname}.json")
+        if not os.path.exists(fpath):
+            # اگر هنوز فایل حدّ وجود ندارد، از آن عبور کن
             continue
 
         try:
-            with open(limits_file, "r") as f:
-                data = json.load(f) or {}
+            with open(fpath, "r") as f:
+                data = json.load(f)
         except Exception:
             data = {}
 
+        # سازگاری با ساختار فعلی
+        data.setdefault("username", uname)
+        data.setdefault("type", "limited")
+        data.setdefault("limit", 0)            # به MB
+        data.setdefault("used", 0)             # به KB (سنت پروژه)
+        data.setdefault("is_blocked", False)
+        last_bytes = safe_int(data.get("last_iptables_bytes", None), None)
+
+        if last_bytes is None:
+            # اولین اجرا: فقط مقدار مرجع را ست کن (مصرف اضافه نکن)
+            data["last_iptables_bytes"] = int(cur_bytes)
+            data["last_checked"] = now
+            atomic_dump_json(fpath, data)
+            continue
+
+        delta = int(cur_bytes) - int(last_bytes)
+        if delta < 0:
+            # کانتر ریست شده؛ از صفر شروع کن
+            delta = int(cur_bytes)
+
+        # پروژه تو مصرف را به «KB» ذخیره می‌کند
         used_kb = safe_int(data.get("used", 0))
-        limit_kb = safe_int(data.get("limit", 0))
-        last_bytes = safe_int(data.get("last_iptables_bytes", 0))
+        used_kb += int(delta / 1024)  # bytes→KB (floor)
+        data["used"] = used_kb
+        data["last_iptables_bytes"] = int(cur_bytes)
+        data["last_checked"] = now
 
-        # به KB یکسان‌سازی
-        current_kb_total = current_bytes // 1024
-        last_kb_total = last_bytes // 1024
-
-        delta_kb = current_kb_total - last_kb_total
-        if delta_kb < 0:
-            # ریست شدن شمارنده‌های iptables
-            delta_kb = current_kb_total
-
-        if delta_kb > 0:
-            used_kb += delta_kb
-            data["used"] = int(used_kb)
-
-        # ذخیره مقدار خام بایت آخر، ولی محاسبات همه بر اساس KB انجام شد
-        data["last_iptables_bytes"] = int(current_bytes)
-        data["last_checked"] = now_ts
-
-        percent = (used_kb / limit_kb * 100.0) if limit_kb > 0 else 0.0
-
-        # هشدار 90%
-        if limit_kb > 0:
-            if percent >= 90 and not data.get("alert_sent", False):
-                send_telegram_message(
-                    f"⚠️ کاربر `{username}` بیش از ۹۰٪ از حجم مجاز خود را مصرف کرده است.\n"
-                    f"📊 میزان مصرف: {percent:.0f}%\n"
-                    f"🕒 زمان بررسی: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                )
-                data["alert_sent"] = True
-            elif percent < 90 and data.get("alert_sent", False):
-                data["alert_sent"] = False
-
-        # مسدودسازی در اتمام حجم
-        if limit_kb > 0 and used_kb >= limit_kb and not data.get("is_blocked", False):
-            try:
-                subprocess.run(["/usr/bin/python3", LOCK_SCRIPT, username, "quota"], check=False)
-            except Exception as e:
-                with open(LOG_FILE, "a") as lf:
-                    lf.write(f"{datetime.now().isoformat()} lock_user call failed for {username}: {e}\n")
-            # بلافاصله فلگ‌ها را نیز ست می‌کنیم (lock_user هم ست می‌کند—اینجا idempotent)
-            data["is_blocked"] = True
-            data["block_reason"] = "quota"
-            data["alert_sent"] = True
-            send_telegram_message(f"⛔️ حجم کاربر `{username}` تمام شد و اکانت مسدود شد.")
-
-        try:
-            atomic_write(limits_file, data)
-        except Exception as e:
-            with open(LOG_FILE, "a") as lf:
-               lf.write(f"{datetime.now().isoformat()} write failed for {limits_file}: {e}\n")
+        atomic_dump_json(fpath, data)
 
 if __name__ == "__main__":
     main()
+
 EOF
 
 #chmod +x /usr/local/bin/log_user_traffic.py
