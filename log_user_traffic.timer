@@ -1,5 +1,6 @@
 # /etc/systemd/system/log-user-traffic.timer
 cat > /etc/systemd/system/log-user-traffic.timer << 'EOF'
+
 [Unit]
 Description=Run log-user-traffic every 30s
 
@@ -12,6 +13,7 @@ Persistent=true
 
 [Install]
 WantedBy=timers.target
+
 
 
 EOF
