@@ -4,65 +4,61 @@ cat > /root/fix-iptables.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[+] Fixing iptables for per-UID bidirectional accounting (connmark)..."
+echo "[+] Fixing iptables for SSH per-UID accounting..."
 
-CHAIN_MARK="SSH_MARK"
-CHAIN_UIDS="SSH_UIDS"
+CHAIN="SSH_USERS"
 LIMITS_DIR="/etc/sshmanager/limits"
 
-# انتخاب backend سازگار
-pick_backend() {
-  local ipt_candidates=("iptables" "iptables-legacy" "iptables-nft")
-  for b in "${ipt_candidates[@]}"; do
-    if command -v "$b" >/dev/null 2>&1; then
-      if "$b" -L >/dev/null 2>&1; then
-        IPT="$b"
-        break
-      fi
-    fi
-  done
-  : "${IPT:=iptables}"
+# انتخاب iptables
+if command -v iptables-legacy >/dev/null 2>&1; then
+  IPT="iptables-legacy"
+elif command -v iptables-nft >/dev/null 2>&1; then
+  IPT="iptables-nft"
+else
+  IPT="iptables"
+fi
 
-  if [[ "$IPT" == "iptables-legacy" ]]; then
-    SAVE="iptables-legacy-save"
-  elif [[ "$IPT" == "iptables-nft" ]]; then
-    SAVE="iptables-nft-save"
-  else
-    SAVE="iptables-save"
-  fi
-
+# بررسی پشتیبانی -w
+if $IPT -L >/dev/null 2>&1; then
   if $IPT -w -L >/dev/null 2>&1; then
-    IPTW="$IPT -w"
+    IPT_W="$IPT -w"
   else
-    IPTW="$IPT"
+    IPT_W="$IPT"
   fi
-}
-pick_backend
+else
+  echo "❌ iptables command not found!"
+  exit 1
+fi
 
-# ساخت زنجیره‌ها در صورت نبود
-$IPTW -N "$CHAIN_MARK" 2>/dev/null || true
-$IPTW -N "$CHAIN_UIDS" 2>/dev/null || true
+# ساخت chain اگر نبود
+$IPT_W -N "$CHAIN" 2>/dev/null || true
 
-# اتصال idempotent: OUTPUT → SSH_MARK (برای set connmark) و OUTPUT/INPUT → SSH_UIDS (برای شمارش)
-$IPTW -C OUTPUT -j "$CHAIN_MARK" 2>/dev/null || $IPTW -I OUTPUT 1 -j "$CHAIN_MARK"
-# بعد از درج قبلی، این یکی را در پوزیشن 2 می‌گذاریم تا ترتیب پایدار بماند
-$IPTW -C OUTPUT -j "$CHAIN_UIDS" 2>/dev/null || $IPTW -I OUTPUT 2 -j "$CHAIN_UIDS"
-$IPTW -C INPUT  -j "$CHAIN_UIDS" 2>/dev/null || $IPTW -I INPUT  1 -j "$CHAIN_UIDS"
+# تضمین پرش OUTPUT در خط ۱
+if $IPT_W -C OUTPUT -j "$CHAIN" 2>/dev/null; then
+  first_target="$($IPT_W -L OUTPUT --line-numbers -n | awk 'NR==3{print $3}')"
+  if [[ "${first_target:-}" != "$CHAIN" ]]; then
+    while $IPT_W -C OUTPUT -j "$CHAIN" 2>/dev/null; do
+      $IPT_W -D OUTPUT -j "$CHAIN" || true
+    done
+    $IPT_W -I OUTPUT 1 -j "$CHAIN"
+  fi
+else
+  $IPT_W -I OUTPUT 1 -j "$CHAIN"
+fi
 
-# پاکسازی امن رول‌های درون‌زنجیره (جریان فایروال را تغییر نمی‌دهیم)
-$IPTW -F "$CHAIN_MARK"
-$IPTW -F "$CHAIN_UIDS"
+# پاکسازی رول‌های قبلی
+$IPT_W -F "$CHAIN"
 
-# گردآوری UID ها از سیستم و لیست JSON ها
+# جمع‌آوری UIDهای واقعی
 declare -A WANT_UIDS
 while IFS=: read -r user _ uid _; do
   [[ -n "$user" && "$uid" =~ ^[0-9]+$ ]] || continue
-  # کاربرهای واقعی
   if (( uid >= 1000 )) && [[ "$user" != "nobody" ]]; then
     WANT_UIDS["$uid"]=1
   fi
 done < <(getent passwd)
 
+# اگر limits هم هست، اسم‌ها را به UID تبدیل کن و اضافه کن
 if [[ -d "$LIMITS_DIR" ]]; then
   for f in "$LIMITS_DIR"/*.json; do
     [[ -f "$f" ]] || continue
@@ -76,25 +72,12 @@ if [[ -d "$LIMITS_DIR" ]]; then
   done
 fi
 
-# برای هر UID:
-# 1) در OUTPUT: با owner+NEW، connmark اتصال را برابر UID می‌گذاریم (ست‌شدن کافیست، نیازی به ACCEPT نیست)
-# 2) در هر دو مسیر: بر اساس connmark==UID فقط شمارش می‌کنیم و برمی‌گردیم (RETURN) تا جریان فایروال تغییر نکند
+# اضافه‌کردن دقیقاً یک rule ACCEPT برای هر UID
 for uid in $(printf "%s\n" "${!WANT_UIDS[@]}" | sort -n); do
-  # ست connmark روی اولین بسته اتصال (NEW)
-  $IPTW -A "$CHAIN_MARK" -m owner --uid-owner "$uid" -m conntrack --ctstate NEW -j CONNMARK --set-mark "$uid"
-  # رول‌های حسابداری (هدف: RETURN برای عدم تغییر مسیر)
-  $IPTW -A "$CHAIN_UIDS" -m connmark --mark "$uid" -j RETURN
+  $IPT_W -A "$CHAIN" -m owner --uid-owner "$uid" -j ACCEPT
 done
 
-echo "[i] OUTPUT head:"
-$IPTW -L OUTPUT -v -n --line-numbers | sed -n '1,6p'
-echo "[i] INPUT head:"
-$IPTW -L INPUT  -v -n --line-numbers | sed -n '1,6p'
-echo "[i] $CHAIN_MARK:"
-$IPTW -L "$CHAIN_MARK" -v -n -x | sed -n '1,12p'
-echo "[i] $CHAIN_UIDS:"
-$IPTW -L "$CHAIN_UIDS" -v -n -x | sed -n '1,12p'
-echo "[✓] iptables fixed (bidirectional per-UID accounting via connmark)."
+echo "[✓] iptables fixed."
 
 
 
