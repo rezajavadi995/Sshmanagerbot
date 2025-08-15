@@ -2,36 +2,19 @@ sudo tee /usr/local/bin/init_last_iptables.py > /dev/null <<'PY'
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-init_last_iptables.py
-Initialize last_iptables_bytes fields in /etc/sshmanager/limits
+Initialize last_iptables_bytes using SSH_UIDS (connmark counters)
+Safe to run once after migration so that log_user_traffic deltas درست محاسبه شود
 """
-
-import subprocess, json, os, re, shutil, argparse
+import subprocess, json, os, re, shutil, argparse, pwd
 from datetime import datetime
 
 LIMITS_DIR = "/etc/sshmanager/limits"
-CHAIN_NAME = "SSH_USERS"
+CHAIN_UIDS = "SSH_UIDS"
 BACKUP_DIR_BASE = "/root/backups/limits-init"
 LOG_FILE = "/var/log/sshmanager-traffic.log"
 
-# مسیر درست قفل
-ENABLE_AUTO_LOCK = True
-LOCK_USER_CMD = "/root/sshmanager/lock_user.sh {username}"
-
-# اجبار به legacy
-IPT_SAVE_CMD = "iptables-legacy-save"
-
-def safe_int(v, d=0):
-    try:
-        return int(v)
-    except Exception:
-        try:
-            return int(float(v))
-        except Exception:
-            return d
-
 def log(s):
-    ts = datetime.now().isoformat()
+    ts = datetime.now().isoformat(timespec="seconds")
     msg = f"{ts} INIT: {s}"
     print(msg)
     try:
@@ -40,47 +23,50 @@ def log(s):
     except Exception:
         pass
 
-def parse_iptables_save():
+def pick_save_cmd():
+    for cmd in (["iptables-save","-c"], ["iptables-legacy-save","-c"], ["iptables-nft-save","-c"]):
+        try:
+            out = subprocess.check_output(cmd, text=True, errors="ignore")
+            if f"\n:{CHAIN_UIDS} " in out or f" -A {CHAIN_UIDS} " in out:
+                return cmd[0]
+        except Exception:
+            pass
+    return "iptables-save"
+
+SAVE_CMD = pick_save_cmd()
+
+RE_DEC = re.compile(r"\[(\d+):(\d+)\].*?\b-A\s+%s\b.*?-m\s+connmark\s+--mark\s+(\d+)" % re.escape(CHAIN_UIDS))
+RE_HEX = re.compile(r"\[(\d+):(\d+)\].*?\b-A\s+%s\b.*?ctmark\s+match\s+0x([0-9A-Fa-f]+)(?:/0x[0-9A-Fa-f]+)?" % re.escape(CHAIN_UIDS))
+
+def parse_iptables():
     try:
-        p = subprocess.run([IPT_SAVE_CMD,"-c"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
-        out = p.stdout or ""
+        out = subprocess.check_output([SAVE_CMD,"-c"], text=True, errors="ignore")
     except Exception as e:
-        log(f"{IPT_SAVE_CMD} failed: {e}")
+        log(f"{SAVE_CMD} failed: {e}")
         return {}
     res = {}
     for ln in out.splitlines():
-        if f"-A {CHAIN_NAME}" not in ln or "--uid-owner" not in ln:
+        if f" -A {CHAIN_UIDS} " not in ln:
             continue
-        lb = ln.find('['); rb = ln.find(']')
-        bytes_count = 0
-        if lb != -1 and rb != -1 and rb > lb:
-            counters = ln[lb+1:rb]
-            parts = counters.split(":")
-            if len(parts) == 2:
-                bytes_count = safe_int(parts[1], 0)
-        m = re.search(r"--uid-owner\s+(\d+)", ln)
-        if m:
-            uid = m.group(1)
-            res[str(uid)] = int(bytes_count)
+        m = RE_DEC.search(ln) or RE_HEX.search(ln)
+        if not m: 
+            continue
+        pkts, by, mark = m.groups()
+        uid = int(mark, 16) if m.re is RE_HEX else int(mark)
+        res[str(uid)] = int(by)
     return res
 
 def uid_for_username(username):
-    try:
-        p = subprocess.run(["getent","passwd",username], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
-        out = p.stdout.strip()
-        if out:
-            return out.split(":")[2]
-    except Exception:
-        pass
-    return None
+    try: return pwd.getpwnam(username).pw_uid
+    except Exception: return None
 
 def backup_limits():
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     dest = f"{BACKUP_DIR_BASE}-{ts}"
     try:
-        if os.path.exists(LIMITS_DIR):
+        if os.path.isdir(LIMITS_DIR):
             shutil.copytree(LIMITS_DIR, dest)
-            log(f"Backup created: {dest}")
+            log(f"Backup: {dest}")
             return dest
     except Exception as e:
         log(f"Backup failed: {e}")
@@ -88,71 +74,61 @@ def backup_limits():
 
 def main(force=False, backup=True):
     if not os.path.isdir(LIMITS_DIR):
-        log(f"{LIMITS_DIR} not found; exiting.")
+        log(f"{LIMITS_DIR} not found")
         return 2
     if backup:
         backup_limits()
-    counters = parse_iptables_save()
-    changed, skipped, errors = [], [], []
+
+    counters = parse_iptables()
+    changed = errors = 0
     for fn in sorted(os.listdir(LIMITS_DIR)):
-        if not fn.endswith(".json"):
+        if not fn.endswith(".json"): 
             continue
         path = os.path.join(LIMITS_DIR, fn)
         username = fn[:-5]
         try:
-            with open(path, "r") as f:
-                data = json.load(f) or {}
+            data = json.load(open(path)) or {}
         except Exception as e:
-            errors.append((path, f"read json failed: {e}"))
+            log(f"{path}: read json failed: {e}")
+            errors += 1
             continue
-        last_bytes = data.get("last_iptables_bytes", None)
-        valid = isinstance(last_bytes, int) and last_bytes >= 0
-        if valid:
-            skipped.append((username, "already set"))
-            continue
-        uid = uid_for_username(username)
-        if uid and uid in counters:
-            cur_bytes = int(counters[uid])
-            data["last_iptables_bytes"] = cur_bytes
-            data["last_checked"] = int(datetime.now().timestamp())
-            try:
-                tmp = path + ".tmp"
-                with open(tmp, "w") as f:
-                    json.dump(data, f, indent=4, ensure_ascii=False)
-                os.replace(tmp, path)
-                changed.append((username, cur_bytes))
-                log(f"{username}: set last_iptables_bytes={cur_bytes}")
-                # قفل خودکار اگر لازم باشد
-                if ENABLE_AUTO_LOCK and data.get("max_bytes", 0) > 0 and cur_bytes >= data["max_bytes"]:
-                    subprocess.run(LOCK_USER_CMD.format(username=username), shell=True)
-                    log(f"{username} locked due to limit reached.")
-            except Exception as e:
-                errors.append((path, f"write failed: {e}"))
-        else:
-            if force:
-                data["last_iptables_bytes"] = 0
-                data["last_checked"] = int(datetime.now().timestamp())
-                try:
-                    tmp = path + ".tmp"
-                    with open(tmp, "w") as f:
-                        json.dump(data, f, indent=4, ensure_ascii=False)
-                    os.replace(tmp, path)
-                    changed.append((username, 0))
-                    log(f"{username}: force-set last_iptables_bytes=0")
-                except Exception as e:
-                    errors.append((path, f"write failed: {e}"))
-            else:
-                skipped.append((username, "no iptables record"))
-    log(f"INIT finished: changed={len(changed)} skipped={len(skipped)} errors={len(errors)}")
-    return 0
 
-if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description="Initialize last_iptables_bytes for sshmanager limits")
+        if isinstance(data.get("last_iptables_bytes"), int) and data["last_iptables_bytes"] >= 0:
+            continue  # already initialized
+
+        uid = uid_for_username(username)
+        if uid is None:
+            log(f"{username}: no uid, skip")
+            continue
+
+        cur = counters.get(str(uid))
+        if cur is None and not force:
+            log(f"{username}: no counter found, skip (use --force to set 0)")
+            continue
+
+        val = int(cur or 0)
+        data["last_iptables_bytes"] = val
+        data["last_checked"] = int(datetime.now().timestamp())
+
+        tmp = path + ".tmp"
+        try:
+            json.dump(data, open(tmp,"w"), indent=4, ensure_ascii=False)
+            os.replace(tmp, path)
+            changed += 1
+            log(f"{username}: last_iptables_bytes={val}")
+        except Exception as e:
+            errors += 1
+            log(f"{username}: write failed: {e}")
+
+    log(f"INIT finished: changed={changed} errors={errors}")
+    return 0 if errors == 0 else 2
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
     ap.add_argument("--no-backup", dest="backup", action="store_false")
-    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--force", action="store_true", help="set 0 if no counter exists")
     args = ap.parse_args()
-    rc = main(force=args.force, backup=args.backup)
-    raise SystemExit(rc)
+    raise SystemExit(main(force=args.force, backup=args.backup))
 
 PY
 
