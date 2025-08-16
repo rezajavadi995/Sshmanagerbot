@@ -135,7 +135,6 @@ def kb_to_human(kb: int) -> str:
 
 ####
 
-# جایگزین کامل تابع در ربات — نسخه‌ی نهایی
 def update_live_usage(force_run: bool = True) -> None:
     """
     بروزرسانی زنده مصرف را به تنها منبع معتبر واگذار می‌کند:
