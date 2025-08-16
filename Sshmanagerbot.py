@@ -797,16 +797,6 @@ async def handle_delete_input(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 
-
-
-#async def ask_user_to_lock(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    #await update.callback_query.answer()
-    #if update.effective_user.id != ADMIN_ID:
-        #return
-    #context.user_data["awaiting_lock"] = True
-    #await update.callback_query.message.reply_text("🛑 نام کاربری را برای *قفل کردن* وارد کنید:", parse_mode="Markdown")
-
-
 #تابع جدید قفل کردن کاربر
 async def start_lock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
