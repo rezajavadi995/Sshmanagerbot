@@ -499,148 +499,6 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
 
 ###################
 
-"""async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    username = context.user_data.get("renew_username", "")
-    action = context.user_data.get("renew_action", "")
-    data = query.data
-
-    added_days = 0
-    added_gb = 0
-
-    if not username or not action:
-        await query.message.reply_text("❌ اطلاعات تمدید ناقص است.")
-        return ConversationHandler.END
-
-    rc, out, err = run_cmd(["id", "-u", username])
-    uid = out.strip() if rc == 0 else ""
-    limits_file = f"/etc/sshmanager/limits/{username}.json"
-
-    # --- تمدید زمان ---
-    if action == "renew_time" and data.startswith("add_days_"):
-        days = int(data.replace("add_days_", ""))
-        added_days = days
-
-        output = subprocess.getoutput(f"chage -l {username} 2>/dev/null")
-        current_exp = ""
-        for line in output.splitlines():
-            if "Account expires" in line:
-                current_exp = line.split(":", 1)[1].strip()
-                break
-
-        if current_exp.lower() != "never" and current_exp:
-            try:
-                current_date = datetime.strptime(current_exp, "%b %d, %Y")
-                new_date = current_date + timedelta(days=days)
-            except Exception:
-                new_date = datetime.now() + timedelta(days=days)
-        else:
-            new_date = datetime.now() + timedelta(days=days)
-
-        subprocess.run(["sudo", "chage", "-E", new_date.strftime("%Y-%m-%d"), username], check=False)
-
-        try:
-            with open(limits_file, "r") as f:
-                j = json.load(f)
-        except Exception:
-            j = {}
-
-        # آنلاک خودکار اگر قفل موقت بوده
-        if j.get("is_blocked", False) and j.get("block_reason") != "manual":
-            subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)
-            subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)
-            subprocess.run(["sudo", "passwd", "-u", username], check=False)
-            subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
-
-            rc = subprocess.run(
-                ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                stderr=subprocess.DEVNULL
-            ).returncode
-            if rc != 0:
-                subprocess.run(
-                    ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                    check=False
-                )
-
-            j["is_blocked"] = False
-            j["block_reason"] = None
-            j["alert_sent"] = False
-
-        j["expire_timestamp"] = int(new_date.timestamp())
-        # ذخیره امن
-        atomic_write(limits_file, j)
-
-        await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
-        context.user_data["added_days"] = added_days
-
-        keyboard = [
-            [InlineKeyboardButton("➕ تمدید حجم", callback_data="renew_volume"),
-             InlineKeyboardButton("❌ خیر", callback_data="end_extend")]
-        ]
-        await query.message.reply_text("آیا می‌خواهید حجم هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
-        return ASK_ANOTHER_RENEW
-
-    # --- تمدید حجم ---
-    elif action == "renew_volume" and data.startswith("add_gb_"):
-        gb = int(data.replace("add_gb_", ""))
-        added_gb = gb
-
-        if os.path.exists(limits_file):
-            try:
-                with open(limits_file, "r") as f:
-                    j = json.load(f)
-            except Exception:
-                j = {}
-
-            # هر مقدار GB معادلِ KB: GB * 1024 * 1024
-            add_kb = gb * 1024 * 1024
-            j["limit"] = int(j.get("limit", 0)) + add_kb  # اضافه کردن به حجم قبلی
-
-            if j.get("is_blocked", False) and j.get("block_reason") != "manual":
-                subprocess.run(["sudo", "usermod", "-s", "/usr/sbin/nologin", username], check=False)
-                subprocess.run(["sudo", "usermod", "-d", "/nonexistent", username], check=False)
-                subprocess.run(["sudo", "passwd", "-u", username], check=False)
-                subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
-
-                rc = subprocess.run(
-                    ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                    stderr=subprocess.DEVNULL
-                ).returncode
-                if rc != 0:
-                    subprocess.run(
-                        ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                        check=False
-                    )
-
-                j["is_blocked"] = False
-                j["block_reason"] = None
-                j["alert_sent"] = False
-
-            # ذخیره امن با atomic_write — **اصلاح شد** (قبلاً data به جای j استفاده شده بود)
-            atomic_write(limits_file, j)
-
-            await query.message.reply_text(f"📶 حجم اکانت `{username}` به مقدار {gb}GB افزایش یافت.", parse_mode="Markdown")
-            context.user_data["added_gb"] = added_gb
-        else:
-            await query.message.reply_text("❌ فایل محدودیت پیدا نشد.")
-
-        keyboard = [
-            [InlineKeyboardButton("➕ تمدید زمان", callback_data="renew_time"),
-             InlineKeyboardButton("❌ خیر", callback_data="end_extend")]
-        ]
-        await query.message.reply_text("آیا می‌خواهید زمان هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
-        return ASK_ANOTHER_RENEW
-
-    if added_gb and added_days:
-        await query.message.reply_text(
-            f"✅ تمدید انجام شد:\n👤 `{username}`\n🕒 +{added_days} روز\n📶 +{added_gb}GB",
-            parse_mode="Markdown"
-        )
-        return ConversationHandler.END
-
-    return ConversationHandler.END
-    """
 
 
 async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1214,8 +1072,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 # ---------- reporting helper ----------
 
-
-# 📌 هندلر اصلی گزارش
 async def report_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = get_reply_func(update)
     update_live_usage()
@@ -1232,7 +1088,7 @@ async def report_all_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await reply(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-# 📌 کال‌بک هندلینگ صفحه‌بندی
+# کال‌بک هندلینگ صفحه‌بندی
 async def report_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1253,7 +1109,7 @@ async def report_callback_handler(update: Update, context: ContextTypes.DEFAULT_
     await query.edit_message_text(text=text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-# Before def run_bot():
+
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancels a conversation."""
     if update.effective_message:
@@ -1267,7 +1123,6 @@ def run_bot():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # تعریف ConversationHandlerها (این بخش دست نخورده باقی می‌ماند)
     conv_create = ConversationHandler(
         entry_points=[CallbackQueryHandler(ask_username, pattern="^create_user$")],
         states={
@@ -1307,7 +1162,6 @@ def run_bot():
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
 
-    #جدید
     conv_lock = ConversationHandler(
         entry_points=[CallbackQueryHandler(start_lock_user, pattern="^lock_user$")],
         states={
@@ -1316,8 +1170,7 @@ def run_bot():
         fallbacks=[CommandHandler("cancel", cancel_conversation)],
     )
     
-    # اضافه کردن Handlers به ترتیب صحیح:
-    # 1. تمام ConversationHandlerها را ابتدا اضافه کنید.
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", start ))
     app.add_handler(conv_create)
@@ -1326,17 +1179,15 @@ def run_bot():
     app.add_handler(conv_unlock)
     app.add_handler(conv_lock)
 
-    # 2. CallbackQueryHandlerهای غیر مکالمه‌ای را اضافه کنید.
     app.add_handler(CallbackQueryHandler(show_limited_users, pattern="^show_limited$"))
     app.add_handler(CallbackQueryHandler(show_blocked_users, pattern="^show_blocked$"))
     app.add_handler(CallbackQueryHandler(blocked_users_pagination_handler, pattern="^blocked_(next|prev)$"))
 
-    #app.add_handler(CallbackQueryHandler(report_all_users_callback, pattern="^report_users$"))
     app.add_handler(CommandHandler("report_all_users", report_all_users))
     app.add_handler(CallbackQueryHandler(report_callback_handler, pattern="^report_(next|prev)$"))
     app.add_handler(CallbackQueryHandler(lambda u, c: report_all_users(u, c), pattern="^report_users$"))
     
-    # 3. MessageHandlerهای متنی را در انتها اضافه کنید تا با مکالمه تداخل نداشته باشند.
+    # MessageHandlerهای متنی را در انتها اضافه کنید تا با مکالمه تداخل نداشته باشند.
     #app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))  # for lock flow
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))       # general
     
