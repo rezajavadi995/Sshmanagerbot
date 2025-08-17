@@ -1,0 +1,21 @@
+cat > /etc/systemd/system/updater_bot.service
+[Unit]
+Description=SSHManager Updater Bot
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/root
+ExecStart=/usr/bin/python3 /root/updater_bot.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+######
+
+systemctl daemon-reload
+systemctl enable updater_bot.service
+systemctl start updater_bot.service
