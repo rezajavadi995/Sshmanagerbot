@@ -1,6 +1,6 @@
 #ساخت فایل سیستمی برای اجرای دائمی ربات
 
-cat > /etc/systemd/system/sshmanagerbot.service << 'EOD'
+cat > /etc/systemd/system/sshmanagerbot.service << 'EOF'
 [Unit]
 Description=SSH Manager Telegram Bot
 After=network.target
