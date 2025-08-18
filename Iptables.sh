@@ -79,5 +79,11 @@ echo "[✓] iptables fixed."
 
 EOF
 
+##########
+install -m 755 /root/fix-iptables.sh /root/fix-iptables.sh
+systemctl daemon-reload || true
+systemctl start fix-iptables.service 2>/dev/null || bash /root/fix-iptables.sh
+
+
 chmod +x /root/fix-iptables.sh
 systemctl enable --now fix-iptables.service
