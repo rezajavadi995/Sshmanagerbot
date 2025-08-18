@@ -5,7 +5,7 @@ After=network.target
 
 [Service]
 User=root
-WorkingDirectory=/root/github_bot
+WorkingDirectory=/root
 ExecStart=/usr/bin/python3 /root/github_bot.py
 Restart=always
 Environment=PYTHONUNBUFFERED=1
