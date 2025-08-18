@@ -9,7 +9,7 @@ echo "[+] Fixing iptables for SSH per-UID accounting..."
 CHAIN="SSH_USERS"
 LIMITS_DIR="/etc/sshmanager/limits"
 
-# انتخاب iptables
+# انتخاب iptables (اولویت: legacy → nft → پیش‌فرض)
 if command -v iptables-legacy >/dev/null 2>&1; then
   IPT="iptables-legacy"
 elif command -v iptables-nft >/dev/null 2>&1; then
@@ -46,7 +46,7 @@ else
   $IPT_W -I OUTPUT 1 -j "$CHAIN"
 fi
 
-# پاکسازی رول‌های قبلی
+# پاکسازی رول‌های قبلی (ضد duplication)
 $IPT_W -F "$CHAIN"
 
 # جمع‌آوری UIDهای واقعی
@@ -78,8 +78,6 @@ for uid in $(printf "%s\n" "${!WANT_UIDS[@]}" | sort -n); do
 done
 
 echo "[✓] iptables fixed."
-
-
 
 EOF
 
