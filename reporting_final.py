@@ -1,5 +1,6 @@
 # /root/reporting_final.py
 cat > /root/reporting_final.py << 'EOF'
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os, json, subprocess
 from datetime import datetime
