@@ -1,4 +1,4 @@
-# /root/reporting_final.py
+
 cat > /root/reporting_final.py << 'EOF'
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -197,3 +197,8 @@ def register_reporting_handlers(application):
     application.add_handler(CommandHandler("report_volume", report_volume_entry))
     application.add_handler(CallbackQueryHandler(report_pagination_cb, pattern=r"^rep:(all|vol):(page|refresh)="))
 EOF
+
+#####
+# chmod +x /root/reporting_final.py
+# python3 /root/reporting_final.py
+
