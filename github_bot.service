@@ -13,3 +13,9 @@ Environment=PYTHONUNBUFFERED=1
 [Install]
 WantedBy=multi-user.target
 EOF
+
+##########
+
+systemctl daemon-reload
+systemctl enable --now github_bot.service
+systemctl status github_bot.service
