@@ -136,4 +136,5 @@ if __name__ == "__main__":
     sys.exit(0 if ok else 2)
 EOF
 
+# mkdir -p /root/sshmanager
 #chmod +x /root/sshmanager/lock_user.py
