@@ -11,3 +11,8 @@ ExecStart=/usr/local/bin/init_last_iptables_bytes.py
 [Install]
 WantedBy=multi-user.target
 EOF
+
+##########
+systemctl daemon-reload
+systemctl enable init-last-iptables.service
+systemctl start init-last-iptables.service
