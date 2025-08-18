@@ -1,0 +1,13 @@
+cat > /etc/systemd/system/init-last-iptables.service << 'EOF'
+
+[Unit]
+Description=Initialize last_iptables_bytes for SSH users
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/init_last_iptables_bytes.py
+
+[Install]
+WantedBy=multi-user.target
+EOF
