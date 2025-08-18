@@ -1,5 +1,4 @@
 sudo tee /usr/local/bin/init_last_iptables_bytes.py > /dev/null <<'PY'
-# /usr/local/bin/init_last_iptables_bytes.py
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os, re, json, pwd, subprocess, time
@@ -94,10 +93,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
 PY
 
-# sudo chmod +x /usr/local/bin/init_last_iptables.py
-# sudo /usr/bin/python3 /usr/local/bin/init_last_iptables.py  اجرا 
+# sudo chmod +x /usr/local/bin/init_last_iptables_bytes.py
+# sudo /usr/bin/python3 /usr/local/bin/init_last_iptables_bytes.py  اجرا 
