@@ -1,6 +1,4 @@
-
 cat > /root/fix-iptables.sh << 'EOF'
-# /root/fix-iptables.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
