@@ -1,0 +1,12 @@
+# 1) دستور زیرو بزن
+apt-get install arptables
+
+# 2) سوئیچ دائمی به legacy:
+update-alternatives --set iptables   /usr/sbin/iptables-legacy
+update-alternatives --set ip6tables  /usr/sbin/ip6tables-legacy
+update-alternatives --set arptables  /usr/sbin/arptables-legacy || true
+update-alternatives --set ebtables   /usr/sbin/ebtables-legacy  || true
+
+# 3) تایید:
+iptables -V
+iptables-save -V 2>/dev/null || true
