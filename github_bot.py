@@ -1,5 +1,6 @@
 #نسخه ۳
-cat > /root/github_bot/github_bot.py << 'EOF'
+#cat > /root/github_bot/github_bot.py << 'EOF'
+cat > /root/github_bot.py << 'EOF'
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
