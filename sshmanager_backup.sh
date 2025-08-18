@@ -36,3 +36,10 @@ Unit=sshmanager-backup.service
 [Install]
 WantedBy=timers.target
 EOF
+
+####
+
+systemctl daemon-reload
+systemctl enable --now sshmanager-backup.timer
+systemctl start sshmanager-backup.service
+journalctl -u sshmanager-backup.service -n 20 --no-pager
