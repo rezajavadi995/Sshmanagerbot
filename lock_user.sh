@@ -7,3 +7,6 @@ USER="${1:?username required}"
 REASON="${2:-quota}"
 exec /usr/bin/python3 /root/sshmanager/lock_user.py "$USER" "$REASON"
 EOF
+
+#####
+install -m 755 /usr/local/bin/lock_user.sh /usr/local/bin/lock_user.sh
