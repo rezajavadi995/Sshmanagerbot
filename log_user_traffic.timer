@@ -2,20 +2,17 @@
 cat > /etc/systemd/system/log-user-traffic.timer << 'EOF'
 
 [Unit]
-Description=Run log-user-traffic every 30s
+Description=Run log-user-traffic.service every minute
 
 [Timer]
 OnBootSec=20s
-OnUnitActiveSec=30s
-AccuracySec=1s
+OnUnitActiveSec=60s
+AccuracySec=2s
 Unit=log-user-traffic.service
 Persistent=true
 
 [Install]
 WantedBy=timers.target
-
-
-
 EOF
 ######################################
 systemctl daemon-reload
