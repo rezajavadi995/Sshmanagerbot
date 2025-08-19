@@ -117,6 +117,7 @@ for uid in $(printf "%s\n" "${!WANT[@]}" | sort -n); do
 done
 
 echo "[OK] iptables rules installed: OUTPUT(owner+cgroup), FORWARD(cgroup+connmark), MARK chain."
+EOF
 
 ########
 chmod +x /root/fix-iptables.sh
