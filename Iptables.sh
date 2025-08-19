@@ -32,16 +32,13 @@ fi
 $IPT_W -N "$CHAIN" 2>/dev/null || true
 
 # تضمین پرش OUTPUT در خط ۱
-if $IPT_W -C OUTPUT -j "$CHAIN" 2>/dev/null; then
-  first_target="$($IPT_W -L OUTPUT --line-numbers -n | awk 'NR==3{print $3}')"
-  if [[ "${first_target:-}" != "$CHAIN" ]]; then
-    while $IPT_W -C OUTPUT -j "$CHAIN" 2>/dev/null; do
-      $IPT_W -D OUTPUT -j "$CHAIN" || true
-    done
-    $IPT_W -I OUTPUT 1 -j "$CHAIN"
-  fi
-else
+if ! $IPT_W -C OUTPUT -j "$CHAIN" 2>/dev/null; then
   $IPT_W -I OUTPUT 1 -j "$CHAIN"
+fi
+
+# تضمین پرش FORWARD هم
+if ! $IPT_W -C FORWARD -j "$CHAIN" 2>/dev/null; then
+  $IPT_W -I FORWARD 1 -j "$CHAIN"
 fi
 
 # پاکسازی رول‌های قبلی (ضد duplication)
