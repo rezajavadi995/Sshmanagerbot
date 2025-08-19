@@ -2,122 +2,88 @@ cat > /root/fix-iptables.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[+] Fixing iptables for SSH per-UID accounting (MARK + CONNMARK)..."
-
-CHAIN_ACCT="SSH_USERS"          # حسابداری
-CHAIN_MARK="SSH_MARK"           # ست کردن مارک‌ها
+CHAIN_ACCT="SSH_USERS"
+CHAIN_MARK="SSH_MARK"
 LIMITS_DIR="/etc/sshmanager/limits"
 
-# انتخاب iptables (legacy → nft → default)
-if command -v iptables-legacy >/dev/null 2>&1; then
-  IPT="iptables-legacy"
-elif command -v iptables-nft >/dev/null 2>&1; then
-  IPT="iptables-nft"
-else
-  IPT="iptables"
-fi
+# pick iptables binary
+if command -v iptables-legacy >/dev/null 2>&1; then IPT="iptables-legacy"; else IPT="iptables"; fi
+if $IPT -w -L >/dev/null 2>&1; then IPT="$IPT -w"; fi
 
-# iptables-save برای counters
-if command -v iptables-save >/dev/null 2>&1; then
-  IPTS="iptables-save"
-elif command -v iptables-legacy-save >/dev/null 2>&1; then
-  IPTS="iptables-legacy-save"
-else
-  IPTS="iptables-save"
-fi
+# modules (best effort)
+modprobe xt_cgroup   2>/dev/null || true
+modprobe xt_owner    2>/dev/null || true
+modprobe xt_connmark 2>/dev/null || true
 
-# پشتیبانی -w
-if $IPT -L >/dev/null 2>&1; then
-  if $IPT -w -L >/dev/null 2>&1; then
-    IPT_W="$IPT -w"
-  else
-    IPT_W="$IPT"
+# ensure chains exist
+$IPT -t mangle -N "$CHAIN_ACCT" 2>/dev/null || true
+$IPT -t mangle -N "$CHAIN_MARK"  2>/dev/null || true
+
+# global jumps (idempotent; no flush)
+$IPT -t mangle -C OUTPUT  -j "$CHAIN_MARK"  2>/dev/null || $IPT -t mangle -I OUTPUT 1  -j "$CHAIN_MARK"
+$IPT -t mangle -C OUTPUT  -j "$CHAIN_ACCT" 2>/dev/null || $IPT -t mangle -I OUTPUT 2  -j "$CHAIN_ACCT"
+$IPT -t mangle -C FORWARD -j "$CHAIN_ACCT" 2>/dev/null || $IPT -t mangle -I FORWARD 1 -j "$CHAIN_ACCT"
+$IPT -t mangle -C PREROUTING -j CONNMARK --restore-mark 2>/dev/null || $IPT -t mangle -I PREROUTING 1 -j CONNMARK --restore-mark
+
+# helper: ensure a rule exists (by grep signature)
+ensure_rule() {
+  local table="$1" chain="$2" pattern="$3" add_cmd="$4"
+  if ! $IPT -t "$table" -S "$chain" | grep -F -- "$pattern" >/dev/null 2>&1; then
+    eval "$add_cmd"
   fi
-else
-  echo "❌ iptables command not found!"
-  exit 1
-fi
+}
 
-# ماژول‌های لازم (بدون خطا اگر نبودند)
-modprobe xt_owner     2>/dev/null || true
-modprobe xt_mark      2>/dev/null || true
-modprobe xt_connmark  2>/dev/null || true
-
-# ساخت chainها
-$IPT_W -t mangle -N "$CHAIN_ACCT" 2>/dev/null || true
-$IPT_W -t mangle -N "$CHAIN_MARK" 2>/dev/null || true
-
-# پرش‌های عمومی
-if ! $IPT_W -t mangle -C OUTPUT -j "$CHAIN_MARK" 2>/dev/null; then
-  $IPT_W -t mangle -I OUTPUT 1 -j "$CHAIN_MARK"
-fi
-if ! $IPT_W -t mangle -C OUTPUT -j "$CHAIN_ACCT" 2>/dev/null; then
-  $IPT_W -t mangle -I OUTPUT 2 -j "$CHAIN_ACCT"
-fi
-# FORWARD → اگر نشد، فقط هشدار بده
-if ! $IPT_W -t mangle -C FORWARD -j "$CHAIN_ACCT" 2>/dev/null; then
-  if ! $IPT_W -t mangle -I FORWARD 1 -j "$CHAIN_ACCT" 2>/dev/null; then
-    echo "[!] Warning: kernel does not allow FORWARD → skipping..."
-  fi
-fi
-# restore-mark در PREROUTING
-if ! $IPT_W -t mangle -C PREROUTING -j CONNMARK --restore-mark 2>/dev/null; then
-  $IPT_W -t mangle -I PREROUTING 1 -j CONNMARK --restore-mark
-fi
-
-# خالی‌کردن chainها
-$IPT_W -t mangle -F "$CHAIN_MARK"
-$IPT_W -t mangle -F "$CHAIN_ACCT"
-
-# جمع‌آوری UIDهای هدف
-declare -A WANT_UIDS
+# collect target UIDs
+declare -A WANT
+# real users >=1000
 while IFS=: read -r user _ uid _; do
-  [[ -n "$user" && "$uid" =~ ^[0-9]+$ ]] || continue
-  if (( uid >= 1000 )) && [[ "$user" != "nobody" ]]; then
-    WANT_UIDS["$uid"]="$user"
-  fi
+  [[ "$uid" =~ ^[0-9]+$ ]] || continue
+  (( uid >= 1000 )) || continue
+  [[ "$user" != "nobody" ]] || continue
+  WANT["$uid"]="$user"
 done < <(getent passwd)
 
+# include any usernames in limits dir
 if [[ -d "$LIMITS_DIR" ]]; then
   for f in "$LIMITS_DIR"/*.json; do
     [[ -f "$f" ]] || continue
-    uname=$(jq -r '.username // empty' "$f" 2>/dev/null || true)
-    if [[ -n "$uname" ]]; then
-      uid=$(getent passwd "$uname" | cut -d: -f3 || true)
-      if [[ -n "${uid:-}" && "$uid" =~ ^[0-9]+$ && "$uid" -ge 1000 ]]; then
-        WANT_UIDS["$uid"]="$uname"
-      fi
+    u=$(jq -r '.username // empty' "$f" 2>/dev/null || true)
+    if [[ -n "$u" ]]; then
+      uid=$(getent passwd "$u" | cut -d: -f3 || true)
+      [[ "$uid" =~ ^[0-9]+$ && "$uid" -ge 1000 ]] && WANT["$uid"]="$u"
     fi
   done
 fi
 
-# اضافه کردن قوانین برای هر UID
-for uid in $(printf "%s\n" "${!WANT_UIDS[@]}" | sort -n); do
-  user="${WANT_UIDS[$uid]}"
-  MARK_DEC=$(( 0x10000 + uid ))
-  MARK_HEX=$(printf "0x%X" "$MARK_DEC")
+# add rules per user (no flush)
+for uid in $(printf "%s\n" "${!WANT[@]}" | sort -n); do
+  user="${WANT[$uid]}"
+  path="/user.slice/user-${uid}.slice"
 
-  # ست‌مارک + ذخیره
-  $IPT_W -t mangle -A "$CHAIN_MARK" -m owner --uid-owner "$uid" \
-    -j MARK --set-mark "$MARK_DEC"
-  $IPT_W -t mangle -A "$CHAIN_MARK" -m owner --uid-owner "$uid" \
-    -j CONNMARK --save-mark
+  # 1) cgroup path (preferred)
+  sig=" -m cgroup --path ${path} -m comment --comment sshmanager:user=${user};uid=${uid};mode=cgroup "
+  ensure_rule mangle "$CHAIN_ACCT" "$sig" \
+    "$IPT -t mangle -A $CHAIN_ACCT -m cgroup --path $path -m comment --comment 'sshmanager:user=${user};uid=${uid};mode=cgroup' -j ACCEPT"
 
-  # حسابداری OUTPUT
-  $IPT_W -t mangle -A "$CHAIN_ACCT" -m owner --uid-owner "$uid" \
-    -m comment --comment "sshmanager:user=${user};uid=${uid};mode=owner" \
-    -j ACCEPT
+  # 2) owner (backup for OUTPUT)
+  sig2=" -m owner --uid-owner ${uid} -m comment --comment sshmanager:user=${user};uid=${uid};mode=owner "
+  ensure_rule mangle "$CHAIN_ACCT" "$sig2" \
+    "$IPT -t mangle -A $CHAIN_ACCT -m owner --uid-owner $uid -m comment --comment 'sshmanager:user=${user};uid=${uid};mode=owner' -j ACCEPT"
 
-  # حسابداری FORWARD/connmark
-  $IPT_W -t mangle -A "$CHAIN_ACCT" -m connmark --mark "$MARK_DEC" \
-    -m comment --comment "sshmanager:user=${user};uid=${uid};mode=connmark;mark=${MARK_HEX}" \
-    -j ACCEPT
+  # 3) connmark (backup for FORWARD)
+  mark=$((0x10000 + uid)); hex=$(printf "0x%X" "$mark")
+  sig3=" -m connmark --mark ${mark} -m comment --comment sshmanager:user=${user};uid=${uid};mode=connmark;mark=${hex} "
+  ensure_rule mangle "$CHAIN_ACCT" "$sig3" \
+    "$IPT -t mangle -A $CHAIN_ACCT -m connmark --mark $mark -m comment --comment 'sshmanager:user=${user};uid=${uid};mode=connmark;mark=${hex}' -j ACCEPT"
 
-  echo "[+] rules added for $user (uid=$uid, mark=$MARK_HEX)"
+  # mark/save in MARK chain (for new conns)
+  ensure_rule mangle "$CHAIN_MARK" " --uid-owner ${uid} -j MARK --set-mark ${mark}" \
+    "$IPT -t mangle -A $CHAIN_MARK -m owner --uid-owner $uid -j MARK --set-mark $mark"
+  ensure_rule mangle "$CHAIN_MARK" " --uid-owner ${uid} -j CONNMARK --save-mark" \
+    "$IPT -t mangle -A $CHAIN_MARK -m owner --uid-owner $uid -j CONNMARK --save-mark"
 done
 
-echo "[✓] iptables fixed (MARK/CONNMARK)."
-
+echo "[OK] iptables (cgroup/owner/connmark) ensured without flushing."
 EOF
 
 ########
