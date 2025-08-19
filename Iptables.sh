@@ -2,9 +2,10 @@ cat > /root/fix-iptables.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "[+] Fixing iptables for SSH per-UID accounting..."
+echo "[+] Fixing iptables for SSH per-UID accounting (MARK + CONNMARK)..."
 
-CHAIN="SSH_USERS"
+CHAIN_ACCT="SSH_USERS"          # حسابداری
+CHAIN_MARK="SSH_MARK"           # ست کردن مارک‌ها
 LIMITS_DIR="/etc/sshmanager/limits"
 
 # انتخاب iptables (legacy → nft → default)
@@ -16,7 +17,16 @@ else
   IPT="iptables"
 fi
 
-# بررسی پشتیبانی -w
+# iptables-save برای تست counters
+if command -v iptables-save >/dev/null 2>&1; then
+  IPTS="iptables-save"
+elif command -v iptables-legacy-save >/dev/null 2>&1; then
+  IPTS="iptables-legacy-save"
+else
+  IPTS="iptables-save"
+fi
+
+# پشتیبانی -w
 if $IPT -L >/dev/null 2>&1; then
   if $IPT -w -L >/dev/null 2>&1; then
     IPT_W="$IPT -w"
@@ -28,32 +38,29 @@ else
   exit 1
 fi
 
-# تست پشتیبانی cgroup match
-HAS_CGROUP=0
-modprobe xt_cgroup 2>/dev/null || true
-if $IPT_W -m cgroup -h >/dev/null 2>&1; then
-  HAS_CGROUP=1
+# ماژول‌های لازم (غیر بحرانی اگر لود نشدند)
+modprobe xt_owner     2>/dev/null || true
+modprobe xt_mark      2>/dev/null || true
+modprobe xt_connmark  2>/dev/null || true
+
+# ساخت chainها
+$IPT_W -t mangle -N "$CHAIN_ACCT" 2>/dev/null || true
+$IPT_W -t mangle -N "$CHAIN_MARK" 2>/dev/null || true
+
+# پرش‌های عمومی (idempotent)
+if ! $IPT_W -t mangle -C OUTPUT   -j "$CHAIN_MARK" 2>/dev/null;   then $IPT_W -t mangle -I OUTPUT   1 -j "$CHAIN_MARK";   fi
+if ! $IPT_W -t mangle -C OUTPUT   -j "$CHAIN_ACCT" 2>/dev/null;   then $IPT_W -t mangle -I OUTPUT   2 -j "$CHAIN_ACCT";   fi
+if ! $IPT_W -t mangle -C FORWARD  -j "$CHAIN_ACCT" 2>/dev/null;   then $IPT_W -t mangle -I FORWARD  1 -j "$CHAIN_ACCT";   fi
+# restore-mark عمومی در PREROUTING
+if ! $IPT_W -t mangle -C PREROUTING -j CONNMARK --restore-mark 2>/dev/null; then
+  $IPT_W -t mangle -I PREROUTING 1 -j CONNMARK --restore-mark
 fi
 
-# ساخت chain اگر نبود
-$IPT_W -N "$CHAIN" 2>/dev/null || true
+# خالی‌کردن chainها (بدون حذف jumpهای عمومی بالا)
+$IPT_W -t mangle -F "$CHAIN_MARK"
+$IPT_W -t mangle -F "$CHAIN_ACCT"
 
-# تضمین پرش OUTPUT در خط 1
-if ! $IPT_W -C OUTPUT -j "$CHAIN" 2>/dev/null; then
-  $IPT_W -I OUTPUT 1 -j "$CHAIN"
-fi
-
-# اگر cgroup پشتیبانی می‌شود، FORWARD هم به chain وصل شود
-if [[ $HAS_CGROUP -eq 1 ]]; then
-  if ! $IPT_W -C FORWARD -j "$CHAIN" 2>/dev/null; then
-    $IPT_W -I FORWARD 1 -j "$CHAIN"
-  fi
-fi
-
-# پاکسازی رول‌های قبلی (ضد duplication)
-$IPT_W -F "$CHAIN"
-
-# جمع‌آوری UIDهای هدف: همه‌ی کاربران واقعی + کاربران موجود در limits
+# جمع‌آوری UIDهای هدف: کاربران واقعی + کاربران موجود در limits
 declare -A WANT_UIDS
 while IFS=: read -r user _ uid _; do
   [[ -n "$user" && "$uid" =~ ^[0-9]+$ ]] || continue
@@ -75,32 +82,34 @@ if [[ -d "$LIMITS_DIR" ]]; then
   done
 fi
 
-# برای هر UID، rule های OUTPUT/owner و (در صورت امکان) FORWARD/cgroup اضافه کن
-# هر Rule comment دارد تا parsing دقیق در اسکریپت پایتون ساده باشد
+# به ازای هر UID قوانین ست‌مارک + حسابداری را اضافه کن
 for uid in $(printf "%s\n" "${!WANT_UIDS[@]}" | sort -n); do
   user="${WANT_UIDS[$uid]}"
+  # MARK = 0x10000 + uid (در هگز برای لاگ)
+  MARK_DEC=$(( 0x10000 + uid ))
+  MARK_HEX=$(printf "0x%X" "$MARK_DEC")
 
-  # OUTPUT / owner (همیشه)
-  $IPT_W -A "$CHAIN" -m owner --uid-owner "$uid" \
+  # 1) ست کردن مارک برای پکت‌های خروجی این UID و ذخیره در conntrack
+  #    (این‌ها در CHAIN_MARK هستند)
+  $IPT_W -t mangle -A "$CHAIN_MARK" -m owner --uid-owner "$uid" \
+    -j MARK --set-mark "$MARK_DEC"
+  $IPT_W -t mangle -A "$CHAIN_MARK" -m owner --uid-owner "$uid" \
+    -j CONNMARK --save-mark
+
+  # 2) حسابداری: OUTPUT/owner  (با کامنت)
+  $IPT_W -t mangle -A "$CHAIN_ACCT" -m owner --uid-owner "$uid" \
     -m comment --comment "sshmanager:user=${user};uid=${uid};mode=owner" \
     -j ACCEPT
 
-  # FORWARD / cgroup (اگر ساپورت هست)
-  if [[ $HAS_CGROUP -eq 1 ]]; then
-    CGP="user.slice/user-${uid}.slice"
-    # بعضی توزیع‌ها session-*.scope هم دارند؛ ولی user-UID.slice ریشه‌ی امن‌تری است
-    # اگر نیاز شد می‌توانیم بعداً Matchهای دقیق‌تری اضافه کنیم.
-    if $IPT_W -A "$CHAIN" -m cgroup --path "$CGP" \
-         -m comment --comment "sshmanager:user=${user};uid=${uid};mode=cgroup;path=${CGP}" \
-         -j ACCEPT 2>/dev/null; then
-      echo "[+] cgroup rule added for $user (uid=$uid) path=$CGP"
-    else
-      echo "[!] cgroup add failed for $user (uid=$uid) — keeping OUTPUT/owner only."
-    fi
-  fi
+  # 3) حسابداری: FORWARD/connmark (با کامنت)
+  $IPT_W -t mangle -A "$CHAIN_ACCT" -m connmark --mark "$MARK_DEC" \
+    -m comment --comment "sshmanager:user=${user};uid=${uid};mode=connmark;mark=${MARK_HEX}" \
+    -j ACCEPT
+
+  echo "[+] rules added for $user (uid=$uid, mark=$MARK_HEX)"
 done
 
-echo "[✓] iptables fixed. (HAS_CGROUP=$HAS_CGROUP)"
+echo "[✓] iptables fixed (MARK/CONNMARK)."
 
 EOF
 
