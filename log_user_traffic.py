@@ -4,22 +4,22 @@ cat > /usr/local/bin/log_user_traffic.py << 'EOF'
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import os, re, json, pwd, subprocess, time
+import os, re, json, subprocess, time, pwd, tempfile, shutil
 
 LIMITS_DIR = "/etc/sshmanager/limits"
 CHAIN_NAME = "SSH_USERS"
-DEBUG_DIR  = "/var/log/sshmanager"
-DEBUG_LOG  = os.path.join(DEBUG_DIR, "init-last-iptables-debug.log")
+DEBUG_DIR  = "/etc/sshmanager/logs"
+DEBUG_LOG  = os.path.join(DEBUG_DIR, "log_user_traffic.log")
 
-CHAIN_RE   = re.compile(rf"^-A\s+{CHAIN_NAME}\b")
-COUNTERS   = re.compile(r"(?:-c\s+(\d+)\s+(\d+)|\[(\d+):(\d+)\])")
-COMMENT    = re.compile(r'-m\s+comment\s+--comment\s+"([^"]+)"')
+CHAIN_RE   = re.compile(rf"^-A\s+{re.escape(CHAIN_NAME)}\b")
 UID_OWNER  = re.compile(r"--uid-owner\s+(\d+)\b")
 CGROUPPATH = re.compile(r"--path\s+([^\s]+)")
+COUNTERS   = re.compile(r"(?:-c\s+(\d+)\s+(\d+)|\[(\d+):(\d+)\])")
+COMMENT    = re.compile(r'-m\s+comment\s+--comment\s+"([^"]+)"')
 
-def log(msg):
+def log(msg: str):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    line = f"{ts} INIT: {msg}"
+    line = f"{ts} LOG: {msg}"
     print(line)
     try:
         os.makedirs(DEBUG_DIR, exist_ok=True)
@@ -29,17 +29,20 @@ def log(msg):
         pass
 
 def run(cmd):
-    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+    return p.returncode, (p.stdout or ""), (p.stderr or "")
 
 def run_iptables_save():
-    for cmd in (["/usr/sbin/iptables-save","-c"], ["iptables-save","-c"], ["/usr/sbin/iptables-legacy-save","-c"]):
-        p = run(cmd)
-        out = (p.stdout or "")
+    for cmd in (["/usr/sbin/iptables-save","-c"],
+                ["iptables-save","-c"],
+                ["/usr/sbin/iptables-legacy-save","-c"]):
+        rc, out, err = run(cmd)
         if out.strip():
             return out
-    for cmd in (["/usr/sbin/iptables-save"], ["iptables-save"], ["/usr/sbin/iptables-legacy-save"]):
-        p = run(cmd)
-        out = (p.stdout or "")
+    for cmd in (["/usr/sbin/iptables-save"],
+                ["iptables-save"],
+                ["/usr/sbin/iptables-legacy-save"]):
+        rc, out, err = run(cmd)
         if out.strip():
             return out
     return ""
@@ -54,19 +57,27 @@ def uid_to_username(uid: int):
     try: return pwd.getpwuid(uid).pw_name
     except KeyError: return None
 
-def current_bytes_per_user(text: str):
-    agg = {}
-    if not text: return agg
+def parse_chain_bytes(text: str):
+    """
+    bytes per username from SSH_USERS chain
+    supports rules with mode in {owner, connmark, cgroup}
+    """
+    usage = {}
+    if not text: return usage
+
     for ln in text.splitlines():
-        if not CHAIN_RE.search(ln): continue
+        if not CHAIN_RE.search(ln):
+            continue
+
         mctr = COUNTERS.search(ln)
         if not mctr: continue
         g = mctr.groups()
         bytes_count = safe_int(g[1] or g[3], 0)
         if bytes_count <= 0: continue
 
-        user = None
         mcom = COMMENT.search(ln)
+        user = None
+        uid  = None
         if mcom:
             tags = {}
             for part in mcom.group(1).split(";"):
@@ -77,6 +88,7 @@ def current_bytes_per_user(text: str):
                 else:
                     tags[part] = True
             user = tags.get("sshmanager:user") or tags.get("user")
+            uid  = safe_int(tags.get("uid"), None) if "uid" in tags else None
 
         if not user:
             mo = UID_OWNER.search(ln)
@@ -85,19 +97,66 @@ def current_bytes_per_user(text: str):
                 if uid is not None:
                     user = uid_to_username(uid)
 
-        if not user and mcom:
-            # cgroup path fallback (قدیمی)
-            txt = mcom.group(1)
-            m = re.search(r"user-(\d+)\.slice", txt)
-            if m:
-                uid = safe_int(m.group(1), None)
-                if uid is not None:
-                    user = uid_to_username(uid)
+        if not user:
+            mp = CGROUPPATH.search(ln)
+            if mp:
+                m = re.search(r"user-(\d+)\.slice", mp.group(1))
+                if m:
+                    uid = safe_int(m.group(1), None)
+                    if uid is not None:
+                        user = uid_to_username(uid)
 
-        if user:
-            agg[user] = agg.get(user, 0) + bytes_count
+        if not user:
+            continue
 
-    return agg
+        usage[user] = usage.get(user, 0) + bytes_count
+
+    return usage
+
+def clamp_delta(cur: int, last: int | None) -> int:
+    if last is None: return 0
+    if cur >= last: return cur - last
+    return cur  # counters reset
+
+def atomic_write_json(path: str, data: dict):
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=d, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        shutil.move(tmp, path)
+    finally:
+        try: os.unlink(tmp)
+        except Exception: pass
+
+def to_int(x, d=0): return safe_int(x, d)
+
+def maybe_lock_user(j: dict, username: str):
+    now = int(time.time())
+    used_bytes  = to_int(j.get("traffic_used_bytes", 0), 0)
+    limit_bytes = to_int(j.get("traffic_limit_bytes", 0), 0)
+    expire_ts   = to_int(j.get("expire_timestamp", 0), 0)
+    over_quota = (limit_bytes > 0 and used_bytes >= limit_bytes)
+    expired    = (expire_ts > 0 and now >= expire_ts)
+
+    if j.get("is_blocked"): return False
+    if not (over_quota or expired): return False
+
+    reason = "quota" if over_quota else "expire"
+    wrapper = "/root/sshmanager/lock_user.py"
+    if os.path.exists(wrapper):
+        try:
+            p = subprocess.run(["/usr/bin/python3", wrapper, username, reason])
+            if p.returncode != 0:
+                raise RuntimeError(f"lock wrapper rc={p.returncode}")
+        except Exception as e:
+            log(f"lock_user error: {e}")
+
+    j["is_blocked"] = True
+    j["block_reason"] = reason
+    j["alert_sent"] = True
+    return True
 
 def main():
     if not os.path.isdir(LIMITS_DIR):
@@ -109,27 +168,50 @@ def main():
         log("iptables-save produced no output.")
         return 0
 
-    agg = current_bytes_per_user(dump)
-    changed = 0
-    now = int(time.time())
-    for user, cur_bytes in agg.items():
-        path = os.path.join(LIMITS_DIR, f"{user}.json")
-        if not os.path.exists(path):
-            continue
+    agg_bytes = parse_chain_bytes(dump)  # bytes per username
+
+    updated = 0
+    for fn in os.listdir(LIMITS_DIR):
+        if not fn.endswith(".json"): continue
+        username = fn[:-5]
+        path = os.path.join(LIMITS_DIR, fn)
+
         try:
             with open(path, "r", encoding="utf-8") as f:
-                j = json.load(f)
+                j = json.load(f) or {}
         except Exception:
             j = {}
-        old = j.get("last_iptables_bytes", None)
-        if not isinstance(old, int) or old != int(cur_bytes):
-            j["last_iptables_bytes"] = int(cur_bytes)
-            j["last_checked"] = now
-            with open(path, "w", encoding="utf-8") as fw:
-                json.dump(j, fw, ensure_ascii=False, indent=2)
-            changed += 1
-            log(f"{user}: last_iptables_bytes={cur_bytes} (was: {old})")
-    log(f"Done. changed={changed}")
+
+        cur_b = to_int(agg_bytes.get(username, 0), 0)
+        last  = j.get("last_iptables_bytes", None)
+        last  = last if isinstance(last, int) and last >= 0 else None
+        delta = clamp_delta(cur_b, last)
+
+        used_bytes_prev = to_int(j.get("traffic_used_bytes", 0), 0)
+        used_bytes      = used_bytes_prev + max(0, delta)
+
+        limit_kb          = to_int(j.get("limit", 0), 0)
+        limit_bytes_alt   = to_int(j.get("traffic_limit_bytes", j.get("limit_bytes", 0)), 0)
+        traffic_limit_b   = limit_bytes_alt
+        if limit_kb > 0:
+            traffic_limit_b = limit_kb * 1024
+        elif limit_bytes_alt > 0 and limit_kb == 0:
+            limit_kb = limit_bytes_alt // 1024
+
+        j["last_iptables_bytes"] = int(cur_b)
+        j["traffic_used_bytes"]  = int(used_bytes)
+        j["traffic_limit_bytes"] = int(max(0, traffic_limit_b))
+        j["used"]  = int(used_bytes // 1024)
+        if limit_kb > 0:
+            j["limit"] = int(limit_kb)
+        j["last_checked"] = int(time.time())
+
+        maybe_lock_user(j, username)
+
+        atomic_write_json(path, j)
+        updated += 1
+
+    log(f"Finished; updated {updated} users.")
     return 0
 
 if __name__ == "__main__":
