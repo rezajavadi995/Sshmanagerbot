@@ -307,7 +307,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = get_reply_func(update)
     if update.effective_user.id != ADMIN_ID:
         return await reply("⛔ لطفا برای خرید به ایدی @UspeedManage پیام بدهید ⛔️")
-    fix_iptables()
+    #fix_iptables()
     Path("/etc/sshmanager/limits").mkdir(parents=True, exist_ok=True)
 
     await reply("📲 پنل مدیریت SSH:", reply_markup=main_menu_keyboard)
@@ -746,16 +746,7 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await query.message.reply_text(f"❌ خطای پیش‌بینی‌نشده:\n{e}")
     return ConversationHandler.END
-
-#تابع حذف جدید جایگزین شد
-#async def delete_user_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    #await update.callback_query.answer()
-    #if update.effective_user.id != ADMIN_ID:
-        #return
-    #await update.callback_query.message.reply_text("لطفاً نام کاربری را برای حذف وارد کنید:")
-    #context.user_data["awaiting_delete"] = True
-
-
+    
 # تابع جدید برای شروع مکالمه حذف اکانت
 async def start_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
@@ -764,7 +755,7 @@ async def start_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     await update.callback_query.message.reply_text("❗️ لطفا نام کاربری را برای حذف وارد کنید:")
     return ASK_DELETE_USERNAME
-
+    
 # تابع جدید برای مدیریت حذف اکانت
 async def handle_delete_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.message.text.strip()
