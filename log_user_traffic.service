@@ -1,8 +1,9 @@
 # /etc/systemd/system/log-user-traffic.service
 cat > /etc/systemd/system/log-user-traffic.service << 'EOF'
-
 [Unit]
 Description=Log SSH Users Traffic into limits JSON
+After=fix-iptables.service network-online.target
+Wants=fix-iptables.service network-online.target
 
 [Service]
 Type=oneshot
@@ -12,6 +13,5 @@ Group=root
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
-
 
 EOF
