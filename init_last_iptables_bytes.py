@@ -132,6 +132,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 PY
+#############
 
-# sudo chmod +x /usr/local/bin/init_last_iptables_bytes.py
-# sudo /usr/bin/python3 /usr/local/bin/init_last_iptables_bytes.py  اجرا 
+sudo chmod +x /usr/local/bin/init_last_iptables_bytes.py
+sudo /usr/bin/python3 /usr/local/bin/init_last_iptables_bytes.py  اجرا 
