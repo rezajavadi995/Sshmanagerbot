@@ -90,4 +90,6 @@ if __name__ == "__main__":
 
 EOF
 
-#chmod +x /usr/local/bin/log_user_traffic.py
+#
+
+chmod +x /usr/local/bin/log_user_traffic.py
