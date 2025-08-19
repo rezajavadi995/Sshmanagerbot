@@ -1,24 +1,56 @@
 sudo tee /usr/local/bin/init_last_iptables_bytes.py > /dev/null <<'PY'
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""
+Initialize/repair last_iptables_bytes in /etc/sshmanager/limits/*.json
+- Robust to legacy/nft mismatch: tries iptables-save, falls back to iptables-legacy-save.
+- Reads [pkts:bytes] counters from SSH_USERS rules with --uid-owner.
+- Does NOT delete/override other fields; only reconciles last_iptables_bytes (and last_checked).
+"""
 import os, re, json, pwd, subprocess, time
 
 LIMITS_DIR = "/etc/sshmanager/limits"
-DEBUG_DIR = "/var/log/sshmanager"
-DEBUG_LOG = os.path.join(DEBUG_DIR, "init-last-iptables-debug.log")
-CHAIN = "SSH_USERS"
+CHAIN_NAME = "SSH_USERS"
+DEBUG_DIR  = "/var/log/sshmanager"
+DEBUG_LOG  = os.path.join(DEBUG_DIR, "init-last-iptables-debug.log")
 
-os.makedirs(DEBUG_DIR, exist_ok=True)
+UID_RE = re.compile(r"--uid-owner\s+(\d+)\b")
+CTR_RE = re.compile(r"\[(\d+):(\d+)\]")
+CHAIN_RE = re.compile(rf"-A\s+{re.escape(CHAIN_NAME)}\b")
 
 def log(msg):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    with open(DEBUG_LOG, "a", encoding="utf-8") as f:
-        f.write(f"[{ts}] {msg}\n")
+    line = f"{ts} INIT: {msg}"
+    print(line)
+    try:
+        os.makedirs(DEBUG_DIR, exist_ok=True)
+        with open(DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
-UID_ACCEPT_RE = re.compile(
-    r"\[(\d+):(\d+)\]\s+-A\s+%s\b.*?-m\s+owner\s+--uid-owner\s+(\d+)\b.*?-j\s+ACCEPT\b"
-    % re.escape(CHAIN)
-)
+def run_iptables_save():
+    # 1) تلاش با iptables-save -c
+    for cmd in (["/usr/sbin/iptables-save","-c"],
+                ["iptables-save","-c"],
+                ["/usr/sbin/iptables-legacy-save","-c"]):
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+            out = (p.stdout or "")
+            if out.strip():
+                return out
+        except Exception as e:
+            log(f"run {cmd!r} failed: {e}")
+    # آخرین تلاش بدون -c (کم‌فایده ولی بهتر از هیچ)
+    for cmd in (["/usr/sbin/iptables-save"], ["iptables-save"], ["/usr/sbin/iptables-legacy-save"]):
+        try:
+            p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+            out = (p.stdout or "")
+            if out.strip():
+                return out
+        except Exception as e:
+            log(f"run {cmd!r} failed (noc): {e}")
+    return ""
 
 def safe_int(x, d=0):
     try:
@@ -29,70 +61,76 @@ def safe_int(x, d=0):
         except Exception:
             return d
 
-def main():
-    log("=" * 20)
-    log("شروع init_last_iptables_bytes")
+def parse_uid_bytes(dump_text):
+    """
+    از خروجی iptables-save، برای هر uid (در CHAIN_NAME) مقدار bytes را برمی‌گرداند.
+    """
+    res = {}
+    if not dump_text:
+        return res
+    for ln in dump_text.splitlines():
+        if not CHAIN_RE.search(ln):
+            continue
+        if "--uid-owner" not in ln:
+            continue
+        m_uid = UID_RE.search(ln)
+        if not m_uid:
+            continue
+        uid = safe_int(m_uid.group(1), -1)
+        if uid < 0:
+            continue
+        m_ctr = CTR_RE.search(ln)
+        bytes_count = 0
+        if m_ctr:
+            # m_ctr.groups() == (pkts, bytes)
+            bytes_count = safe_int(m_ctr.group(2), 0)
+        res[uid] = bytes_count
+    return res
 
+def uname(uid):
     try:
-        out = subprocess.check_output(
-            ["iptables-save", "-c"], text=True, stderr=subprocess.DEVNULL
-        )
-    except subprocess.CalledProcessError:
-        out = subprocess.check_output(["iptables-save"], text=True)
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return None
 
-    by_uid = {}
-    for ln in out.splitlines():
-        if ("-A %s " % CHAIN) not in ln or "--uid-owner" not in ln:
-            continue
-        m = UID_ACCEPT_RE.search(ln)
-        if not m:
-            log(f"⛔ خط نامعتبر iptables: {ln}")
-            continue
-        _, bytes_str, uid_str = m.groups()
-        uid = safe_int(uid_str, None)
-        if uid is None or uid < 1000:
-            continue
-        by_uid[uid] = safe_int(bytes_str, 0)
+def main():
+    if not os.path.isdir(LIMITS_DIR):
+        log(f"{LIMITS_DIR} missing.")
+        return 0
 
+    dump = run_iptables_save()
+    if not dump:
+        log("iptables-save produced no output.")
+        return 0
+
+    by_uid = parse_uid_bytes(dump)
+    changed = 0
     for uid, cur_bytes in by_uid.items():
-        try:
-            uname = pwd.getpwuid(uid).pw_name
-        except KeyError:
-            log(f"⚠️ UID {uid} نامعتبر است (کاربری وجود ندارد)")
+        user = uname(uid)
+        if not user:
             continue
-
-        f = os.path.join(LIMITS_DIR, f"{uname}.json")
-        if not os.path.exists(f):
-            log(f"⚠️ فایل محدودیت برای {uname} وجود ندارد ({f})")
+        path = os.path.join(LIMITS_DIR, f"{user}.json")
+        if not os.path.exists(path):
             continue
-
         try:
-            j = json.load(open(f, "r", encoding="utf-8"))
-        except Exception as e:
-            log(f"⛔ خطا در خواندن JSON {f}: {e}")
+            with open(path, "r", encoding="utf-8") as f:
+                j = json.load(f)
+        except Exception:
             j = {}
-
-        # بکاپ
-        backup_path = f + f".bak_{int(time.time())}"
-        try:
-            with open(backup_path, "w", encoding="utf-8") as fw:
+        old = j.get("last_iptables_bytes", None)
+        if not isinstance(old, int) or old < 0 or old != cur_bytes:
+            j["last_iptables_bytes"] = int(cur_bytes)
+            j["last_checked"] = int(time.time())
+            with open(path, "w", encoding="utf-8") as fw:
                 json.dump(j, fw, ensure_ascii=False, indent=2)
-        except Exception as e:
-            log(f"⚠️ خطا در ساخت بکاپ {backup_path}: {e}")
-
-        # ثبت مقدار بایت‌ها
-        j["last_iptables_bytes"] = cur_bytes
-        try:
-            with open(f, "w", encoding="utf-8") as fw:
-                json.dump(j, fw, ensure_ascii=False, indent=2)
-            log(f"✅ {uname}: مقدار اولیه last_iptables_bytes = {cur_bytes} ثبت شد")
-        except Exception as e:
-            log(f"⛔ خطا در نوشتن فایل {f}: {e}")
-
-    log("پایان init_last_iptables_bytes")
+            changed += 1
+            log(f"{user}: last_iptables_bytes={cur_bytes} (was: {old})")
+    log(f"Done. changed={changed}")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
+
 PY
 
 # sudo chmod +x /usr/local/bin/init_last_iptables_bytes.py
