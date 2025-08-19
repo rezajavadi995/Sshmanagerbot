@@ -36,11 +36,6 @@ if ! $IPT_W -C OUTPUT -j "$CHAIN" 2>/dev/null; then
   $IPT_W -I OUTPUT 1 -j "$CHAIN"
 fi
 
-# تضمین پرش FORWARD هم
-if ! $IPT_W -C FORWARD -j "$CHAIN" 2>/dev/null; then
-  $IPT_W -I FORWARD 1 -j "$CHAIN"
-fi
-
 # پاکسازی رول‌های قبلی (ضد duplication)
 $IPT_W -F "$CHAIN"
 
