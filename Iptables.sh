@@ -17,7 +17,7 @@ else
   IPT="iptables"
 fi
 
-# iptables-save برای تست counters
+# iptables-save برای counters
 if command -v iptables-save >/dev/null 2>&1; then
   IPTS="iptables-save"
 elif command -v iptables-legacy-save >/dev/null 2>&1; then
@@ -38,7 +38,7 @@ else
   exit 1
 fi
 
-# ماژول‌های لازم (غیر بحرانی اگر لود نشدند)
+# ماژول‌های لازم (بدون خطا اگر نبودند)
 modprobe xt_owner     2>/dev/null || true
 modprobe xt_mark      2>/dev/null || true
 modprobe xt_connmark  2>/dev/null || true
@@ -47,20 +47,29 @@ modprobe xt_connmark  2>/dev/null || true
 $IPT_W -t mangle -N "$CHAIN_ACCT" 2>/dev/null || true
 $IPT_W -t mangle -N "$CHAIN_MARK" 2>/dev/null || true
 
-# پرش‌های عمومی (idempotent)
-if ! $IPT_W -t mangle -C OUTPUT   -j "$CHAIN_MARK" 2>/dev/null;   then $IPT_W -t mangle -I OUTPUT   1 -j "$CHAIN_MARK";   fi
-if ! $IPT_W -t mangle -C OUTPUT   -j "$CHAIN_ACCT" 2>/dev/null;   then $IPT_W -t mangle -I OUTPUT   2 -j "$CHAIN_ACCT";   fi
-if ! $IPT_W -t mangle -C FORWARD  -j "$CHAIN_ACCT" 2>/dev/null;   then $IPT_W -t mangle -I FORWARD  1 -j "$CHAIN_ACCT";   fi
-# restore-mark عمومی در PREROUTING
+# پرش‌های عمومی
+if ! $IPT_W -t mangle -C OUTPUT -j "$CHAIN_MARK" 2>/dev/null; then
+  $IPT_W -t mangle -I OUTPUT 1 -j "$CHAIN_MARK"
+fi
+if ! $IPT_W -t mangle -C OUTPUT -j "$CHAIN_ACCT" 2>/dev/null; then
+  $IPT_W -t mangle -I OUTPUT 2 -j "$CHAIN_ACCT"
+fi
+# FORWARD → اگر نشد، فقط هشدار بده
+if ! $IPT_W -t mangle -C FORWARD -j "$CHAIN_ACCT" 2>/dev/null; then
+  if ! $IPT_W -t mangle -I FORWARD 1 -j "$CHAIN_ACCT" 2>/dev/null; then
+    echo "[!] Warning: kernel does not allow FORWARD → skipping..."
+  fi
+fi
+# restore-mark در PREROUTING
 if ! $IPT_W -t mangle -C PREROUTING -j CONNMARK --restore-mark 2>/dev/null; then
   $IPT_W -t mangle -I PREROUTING 1 -j CONNMARK --restore-mark
 fi
 
-# خالی‌کردن chainها (بدون حذف jumpهای عمومی بالا)
+# خالی‌کردن chainها
 $IPT_W -t mangle -F "$CHAIN_MARK"
 $IPT_W -t mangle -F "$CHAIN_ACCT"
 
-# جمع‌آوری UIDهای هدف: کاربران واقعی + کاربران موجود در limits
+# جمع‌آوری UIDهای هدف
 declare -A WANT_UIDS
 while IFS=: read -r user _ uid _; do
   [[ -n "$user" && "$uid" =~ ^[0-9]+$ ]] || continue
@@ -82,26 +91,24 @@ if [[ -d "$LIMITS_DIR" ]]; then
   done
 fi
 
-# به ازای هر UID قوانین ست‌مارک + حسابداری را اضافه کن
+# اضافه کردن قوانین برای هر UID
 for uid in $(printf "%s\n" "${!WANT_UIDS[@]}" | sort -n); do
   user="${WANT_UIDS[$uid]}"
-  # MARK = 0x10000 + uid (در هگز برای لاگ)
   MARK_DEC=$(( 0x10000 + uid ))
   MARK_HEX=$(printf "0x%X" "$MARK_DEC")
 
-  # 1) ست کردن مارک برای پکت‌های خروجی این UID و ذخیره در conntrack
-  #    (این‌ها در CHAIN_MARK هستند)
+  # ست‌مارک + ذخیره
   $IPT_W -t mangle -A "$CHAIN_MARK" -m owner --uid-owner "$uid" \
     -j MARK --set-mark "$MARK_DEC"
   $IPT_W -t mangle -A "$CHAIN_MARK" -m owner --uid-owner "$uid" \
     -j CONNMARK --save-mark
 
-  # 2) حسابداری: OUTPUT/owner  (با کامنت)
+  # حسابداری OUTPUT
   $IPT_W -t mangle -A "$CHAIN_ACCT" -m owner --uid-owner "$uid" \
     -m comment --comment "sshmanager:user=${user};uid=${uid};mode=owner" \
     -j ACCEPT
 
-  # 3) حسابداری: FORWARD/connmark (با کامنت)
+  # حسابداری FORWARD/connmark
   $IPT_W -t mangle -A "$CHAIN_ACCT" -m connmark --mark "$MARK_DEC" \
     -m comment --comment "sshmanager:user=${user};uid=${uid};mode=connmark;mark=${MARK_HEX}" \
     -j ACCEPT
@@ -111,8 +118,11 @@ done
 
 echo "[✓] iptables fixed (MARK/CONNMARK)."
 
-
 EOF
+
+########
+chmod +x /root/fix-iptables.sh
+
 
 ##########
 install -m 755 /root/fix-iptables.sh /usr/local/bin/fix-iptables.sh
