@@ -7,12 +7,14 @@ cat > /usr/local/bin/log_user_traffic.py << 'EOF'
 import os, re, json, subprocess, time, pwd, tempfile, shutil
 
 LIMITS_DIR = "/etc/sshmanager/limits"
-#CHAIN_NAME = "SSH_USERS"
-CHAIN_NAME = "SSH_USERS_OUT"
+# --- FIX: Define both chains to read from ---
+CHAINS_TO_LOG = ["SSH_USERS_OUT", "SSH_USERS_FWD"]
 DEBUG_DIR  = "/etc/sshmanager/logs"
 DEBUG_LOG  = os.path.join(DEBUG_DIR, "log_user_traffic.log")
 
-CHAIN_RE   = re.compile(rf"^-A\s+{re.escape(CHAIN_NAME)}\b")
+# --- FIX: Compile regex for each chain ---
+CHAIN_RES  = {name: re.compile(rf"^-A\s+{re.escape(name)}\b") for name in CHAINS_TO_LOG}
+
 UID_OWNER  = re.compile(r"--uid-owner\s+(\d+)\b")
 CGROUPPATH = re.compile(r"--path\s+([^\s]+)")
 COUNTERS   = re.compile(r"(?:-c\s+(\d+)\s+(\d+)|\[(\d+):(\d+)\])")
@@ -60,14 +62,19 @@ def uid_to_username(uid: int):
 
 def parse_chain_bytes(text: str):
     """
-    bytes per username from SSH_USERS chain
-    supports rules with mode in {owner, connmark, cgroup}
+    Parses iptables-save output and aggregates bytes per username from multiple chains.
     """
     usage = {}
     if not text: return usage
 
     for ln in text.splitlines():
-        if not CHAIN_RE.search(ln):
+        # Check if the line belongs to any of our target chains
+        is_target_chain = False
+        for chain_name, chain_re in CHAIN_RES.items():
+            if chain_re.search(ln):
+                is_target_chain = True
+                break
+        if not is_target_chain:
             continue
 
         mctr = COUNTERS.search(ln)
@@ -110,6 +117,7 @@ def parse_chain_bytes(text: str):
         if not user:
             continue
 
+        # Aggregate bytes for the user
         usage[user] = usage.get(user, 0) + bytes_count
 
     return usage
@@ -145,12 +153,14 @@ def maybe_lock_user(j: dict, username: str):
     if not (over_quota or expired): return False
 
     reason = "quota" if over_quota else "expire"
-    wrapper = "/root/sshmanager/lock_user.py"
-    if os.path.exists(wrapper):
+    
+    # Use the absolute path for the lock script for reliability
+    lock_script = "/root/sshmanager/lock_user.py"
+    if os.path.exists(lock_script):
         try:
-            p = subprocess.run(["/usr/bin/python3", wrapper, username, reason])
+            p = subprocess.run(["/usr/bin/python3", lock_script, username, reason])
             if p.returncode != 0:
-                raise RuntimeError(f"lock wrapper rc={p.returncode}")
+                raise RuntimeError(f"lock script wrapper rc={p.returncode}")
         except Exception as e:
             log(f"lock_user error: {e}")
 
@@ -169,7 +179,7 @@ def main():
         log("iptables-save produced no output.")
         return 0
 
-    agg_bytes = parse_chain_bytes(dump)  # bytes per username
+    agg_bytes = parse_chain_bytes(dump)  # bytes per username from both chains
 
     updated = 0
     for fn in os.listdir(LIMITS_DIR):
