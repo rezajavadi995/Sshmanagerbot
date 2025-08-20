@@ -973,12 +973,11 @@ async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE
                     json.dump(user_data, f, indent=4, ensure_ascii=False)
             except Exception:
                 pass
-
-        # اگر کیبورد اصلی داری، همین‌جا استفاده کن؛ در غیر این صورت این خط را ساده بگذار
-        await update.message.reply_text(f"✅ اکانت `{username}` با موفقیت باز شد.", parse_mode="Markdown")
+        await update.message.reply_text(f"✅ اکانت `{username}` با موفقیت باز شد.", parse_mode="Markdown", reply_markup=main_menu_keyboard)
     except Exception:
-        await update.message.reply_text("❌ باز کردن اکانت با خطا مواجه شد. جزئیات در لاگ.")
-    return ConversationHandler.END
+        log.exception("unlock failed for %s", username)
+        await update.message.reply_text("❌ باز کردن اکانت با خطا مواجه شد. جزئیات در لاگ.", reply_markup=main_menu_keyboard)
+
 
 #######
 async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
