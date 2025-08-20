@@ -1,4 +1,4 @@
-# /root/sshmanager/lock_user.py
+/root/sshmanager/lock_user.py
 cat > /root/sshmanager/lock_user.py << 'EOF'
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
@@ -10,6 +10,9 @@ ADMIN_ID = 8062924341
 LIMITS_DIR = "/etc/sshmanager/limits"
 LOG_FILE = "/var/log/sshmanager-traffic.log"
 NOLOGIN_PATHS = ["/usr/sbin/nologin", "/sbin/nologin", "/usr/bin/nologin"]
+
+# --- FIX: Define the correct chains to interact with ---
+IPTABLES_CHAINS_TO_CLEAR = ["SSH_USERS_OUT", "SSH_USERS_FWD", "SSH_MARK"]
 
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("lock_user")
@@ -87,15 +90,26 @@ def lock_user(username, reason="quota"):
     rc, out, err = run_cmd(["id","-u", username])
     uid = out.strip() if rc == 0 else ""
     if uid.isdigit():
-        # حذف idempotent (تا در صورت چند Rule همه حذف شوند)
+        # --- FIX: Clear rules from all relevant chains ---
         removed_any = False
-        while True:
-            rc2, _, _ = run_cmd(["iptables","-D","SSH_USERS","-m","owner","--uid-owner", uid,"-j","ACCEPT"])
-            if rc2 == 0:
-                removed_any = True
-                continue
-            break
-        successes.append("iptables-removed" if removed_any else "iptables-not-present")
+        for chain in IPTABLES_CHAINS_TO_CLEAR:
+             # Deleting rules idempotently (loop until all matching rules are gone)
+            while True:
+                # Note: The rules might be slightly different in each chain
+                # We target the most common pattern: owner matching
+                rc2, _, _ = run_cmd(["iptables", "-t", "mangle", "-D", chain, "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
+                rc3, _, _ = run_cmd(["iptables", "-t", "mangle", "-D", chain, "-m", "owner", "--uid-owner", uid, "-j", "MARK"])
+                rc4, _, _ = run_cmd(["iptables", "-t", "mangle", "-D", chain, "-m", "owner", "--uid-owner", uid, "-j", "CONNMARK"])
+                
+                # If any deletion was successful, mark it and continue
+                if rc2 == 0 or rc3 == 0 or rc4 == 0:
+                    removed_any = True
+                    continue
+                
+                # No more rules for this UID in this chain
+                break
+        
+        successes.append("iptables-cleared" if removed_any else "iptables-not-present")
     else:
         warnings.append("cannot get uid for user")
 
@@ -124,7 +138,7 @@ def lock_user(username, reason="quota"):
     if failures: log.warning("lock_user partial failures for %s: %s", username, failures)
     else: log.info("User %s locked (reason=%s) — successes: %s warnings: %s", username, reason, successes, warnings)
 
-    return os.path.exists(limit_file_path)
+    return not failures
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
@@ -134,7 +148,10 @@ if __name__ == "__main__":
     reason = sys.argv[2] if len(sys.argv) > 2 else "quota"
     ok = lock_user(username, reason)
     sys.exit(0 if ok else 2)
-EOF
 
-# mkdir -p /root/sshmanager
-#chmod +x /root/sshmanager/lock_user.py
+EOF
+#
+
+mkdir -p /root/sshmanager
+#
+chmod +x /root/sshmanager/lock_user.py
