@@ -1,7 +1,6 @@
 #این نسخه  فعلا باگ  داره ولی درحال اپدیته
 #cat > /root/sshmanagerbot.py << 'EOF'
 #!/usr/bin/env python3
-# sshmanagerbot_fixed.py
 import os
 import subprocess
 import random
@@ -511,146 +510,7 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
 
 ###################
 
-
-
-
-
 #کد جدید ادامه کانورسیشن
-"""
-async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    username = context.user_data.get("renew_username", "")
-    action = context.user_data.get("renew_action", "")
-    data = (query.data or "").strip()
-
-    if not username or not action:
-        await query.message.reply_text("❌ اطلاعات تمدید ناقص است.")
-        return ConversationHandler.END
-
-    # UID کاربر
-    rc, out, err = run_cmd(["id", "-u", username])
-    uid = out.strip() if rc == 0 else ""
-    limits_file = f"/etc/sshmanager/limits/{username}.json"
-
-    # --- تمدید تاریخ ---
-    if action == "renew_time" and data.startswith("add_days_"):
-        days = int(data.replace("add_days_", "") or "0")
-
-        # تاریخ فعلی انقضا (chage)
-        output = subprocess.getoutput(f"chage -l {username} 2>/dev/null")
-        current_exp = ""
-        for line in output.splitlines():
-            if "Account expires" in line:
-                current_exp = line.split(":", 1)[1].strip()
-                break
-
-        if current_exp and current_exp.lower() != "never":
-            try:
-                current_date = datetime.strptime(current_exp, "%b %d, %Y")
-                new_date = current_date + timedelta(days=days)
-            except Exception:
-                new_date = datetime.now() + timedelta(days=days)
-        else:
-            new_date = datetime.now() + timedelta(days=days)
-
-        # اعمال انقضا در سیستم
-        subprocess.run(["sudo", "chage", "-E", new_date.strftime("%Y-%m-%d"), username], check=False)
-
-        # به‌روزرسانی JSON + اگر بلوک موقت بوده، آزادسازی + Rule mangle/owner
-        try:
-            j = {}
-            if os.path.exists(limits_file):
-                with open(limits_file, "r") as f:
-                    j = json.load(f)
-            j["expire_timestamp"] = int(new_date.timestamp())
-
-            # اگر بلوک بوده و دلیلش دستی نیست، آزاد کن + Rule
-            if j.get("is_blocked", False) and j.get("block_reason") != "manual":
-                # آزادسازی سیستم (الگوی قبلی تو: بازگردانی شل به /bin/bash و home)
-                subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=False)
-                subprocess.run(["sudo", "usermod", "-d", f"/home/{username}", username], check=False)
-                subprocess.run(["sudo", "passwd", "-u", username], check=False)
-                subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
-
-                # افزودن Rule در CHAIN درست (mangle/SSH_USERS_OUT) در صورت نبود
-                if uid:
-                    _ensure_owner_rule_on_out_chain(uid)
-
-                # فلگ‌ها
-                j["is_blocked"] = False
-                j["block_reason"] = None
-                j["alert_sent"] = False
-
-            # ذخیرهٔ JSON
-            with open(limits_file, "w") as fw:
-                json.dump(j, fw, indent=4, ensure_ascii=False)
-        except Exception:
-            # عمداً خطا را نادیده می‌گیریم تا UX کاربر خراب نشود؛ اما اگر logger داری می‌توانی لاگ کنی
-            pass
-
-        await query.message.reply_text(
-            f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.",
-            parse_mode="Markdown"
-        )
-
-        # پیشنهاد تمدید حجم
-        keyboard = [
-            [InlineKeyboardButton("➕ تمدید حجم", callback_data="renew_volume"),
-             InlineKeyboardButton("❌ خیر", callback_data="end_extend")]
-        ]
-        await query.message.reply_text(
-            "آیا می‌خواهید حجم هم تمدید شود؟",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return ASK_ANOTHER_RENEW
-
-    # --- تمدید حجم ---
-    elif action == "renew_volume" and data.startswith("add_gb_"):
-        gb = int(data.replace("add_gb_", "") or "0")
-        add_kb = gb * 1024 * 1024
-
-        try:
-            j = {}
-            if os.path.exists(limits_file):
-                with open(limits_file, "r") as f:
-                    j = json.load(f)
-
-            old_limit = safe_int(j.get("limit", 0))
-            j["limit"] = old_limit + add_kb
-
-            # اگر بلوک بوده و دلیلش دستی نیست، آزاد کن + Rule
-            if j.get("is_blocked", False) and j.get("block_reason") != "manual":
-                subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=False)
-                subprocess.run(["sudo", "usermod", "-d", f"/home/{username}", username], check=False)
-                subprocess.run(["sudo", "passwd", "-u", username], check=False)
-                subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
-
-                if uid:
-                    _ensure_owner_rule_on_out_chain(uid)
-
-                j["is_blocked"] = False
-                j["block_reason"] = None
-                j["alert_sent"] = False
-
-            with open(limits_file, "w") as fw:
-                json.dump(j, fw, indent=4, ensure_ascii=False)
-        except Exception:
-            pass
-
-        await query.message.reply_text(
-            f"📶 {gb}GB به حجم `{username}` اضافه شد.",
-            parse_mode="Markdown"
-        )
-        return ConversationHandler.END
-
-    else:
-        await query.message.reply_text("❌ ورودی نامعتبر.")
-        return ConversationHandler.END
-        """
-
-
 
 async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1036,61 +896,6 @@ async def start_unlock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.message.reply_text("🔓 لطفا نام کاربری را برای باز کردن اکانت وارد کنید:")
     return ASK_UNLOCK_USERNAME
 
-"""
-
-async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    username = update.message.text.strip()
-    try:
-        uid = int(subprocess.getoutput(f"id -u {username}").strip())
-        if uid < 1000:
-            await update.message.reply_text("⛔️ این کاربر سیستمی است و نمی‌توان آن را باز کرد.")
-            return ConversationHandler.END
-    except Exception:
-        await update.message.reply_text("❌ کاربر یافت نشد.")
-        return ConversationHandler.END
-
-    limit_file_path = f"/etc/sshmanager/limits/{username}.json"
-    try:
-        # اجرای دستورات آنلاک با run_cmd
-        run_cmd(["sudo", "passwd", "-u", username])   # unlock password
-        run_cmd(["sudo", "chage", "-E", "-1", username])  # remove expire
-        # keep shell as NOLOGIN (if your policy allows tunnel-only). If you want interactive shell use "/bin/bash"
-        run_cmd(["sudo", "usermod", "-s", NOLOGIN_PATH, username])
-
-        # ensure iptables rule exists (add if missing)
-        rc, out, err = run_cmd(["id", "-u", username])
-        uid_s = out.strip() if rc == 0 else ""
-        if uid_s.isdigit():
-            rc2, o2, e2 = run_cmd(["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid_s, "-j", "ACCEPT"])
-            if rc2 != 0:
-                run_cmd(["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid_s, "-j", "ACCEPT"])
-
-        # update JSON
-        if os.path.exists(limit_file_path):
-            try:
-                with open(limit_file_path, "r") as f:
-                    user_data = json.load(f)
-            except Exception:
-                user_data = {}
-            user_data["is_blocked"] = False
-            user_data["block_reason"] = None
-            user_data["alert_sent"] = False
-            user_data.pop("blocked_at", None)
-            try:
-                with open(limit_file_path, "w") as f:
-                    json.dump(user_data, f, indent=4)
-            except Exception:
-                log.exception("failed to write limit file during unlock for %s", username)
-
-        await update.message.reply_text(f"✅ اکانت `{username}` با موفقیت باز شد.", parse_mode="Markdown", reply_markup=main_menu_keyboard)
-    except Exception:
-        log.exception("unlock failed for %s", username)
-        await update.message.reply_text("❌ باز کردن اکانت با خطا مواجه شد. جزئیات در لاگ.", reply_markup=main_menu_keyboard)
-
-    return ConversationHandler.END
-"""
-
-
 #######
 
 async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1109,7 +914,7 @@ async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         # آنلاک
         run_cmd(["sudo", "passwd", "-u", username])            # unlock password
         run_cmd(["sudo", "chage", "-E", "-1", username])       # remove expire
-        run_cmd(["sudo", "usermod", "-s", NOLOGIN_PATH, username])  # طبق سیاست تو: no-login shell
+        run_cmd(["sudo", "usermod", "-s", NOLOGIN_PATH, username]) #طبق سیاست های پروژه
 
         # تضمین Rule در جدول درست (mangle/SSH_USERS_OUT)
         rc, out, err = run_cmd(["id", "-u", username])
@@ -1397,8 +1202,6 @@ def run_bot():
     app.add_handler(CallbackQueryHandler(report_callback_handler, pattern="^report_(next|prev)$"))
     app.add_handler(CallbackQueryHandler(lambda u, c: report_all_users(u, c), pattern="^report_users$"))
     
-    # MessageHandlerهای متنی را در انتها اضافه کنید تا با مکالمه تداخل نداشته باشند.
-    #app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_lock_input))  # for lock flow
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))       # general
     
     app.run_polling()
