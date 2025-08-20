@@ -512,6 +512,8 @@ async def handle_extend_action(update: Update, context: ContextTypes.DEFAULT_TYP
 
 #کد جدید ادامه کانورسیشن
 
+"""
+
 async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -653,6 +655,118 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     return ConversationHandler.END
+
+"""
+
+#
+
+
+async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    username = context.user_data.get("renew_username", "")
+    action = context.user_data.get("renew_action", "")
+    data = query.data
+
+    added_days = 0
+    added_gb = 0
+
+    if not username or not action:
+        await query.message.reply_text("❌ اطلاعات تمدید ناقص است.")
+        return ConversationHandler.END
+
+    limits_file = f"/etc/sshmanager/limits/{username}.json"
+    user_was_unlocked = False
+
+    # --- Read limit file once at the beginning ---
+    try:
+        with open(limits_file, "r") as f:
+            j = json.load(f)
+    except Exception:
+        j = {}
+
+    # --- Logic to unlock user if they were blocked for a non-manual reason ---
+    def unlock_if_needed(user_json):
+        nonlocal user_was_unlocked
+        if user_json.get("is_blocked", False) and user_json.get("block_reason") != "manual":
+            run_cmd(["sudo", "passwd", "-u", username])
+            run_cmd(["sudo", "chage", "-E", "-1", username])
+            # The shell is already nologin, no need to change
+            
+            user_json["is_blocked"] = False
+            user_json["block_reason"] = None
+            user_json["alert_sent"] = False # Reset alert
+            user_was_unlocked = True
+        return user_json
+
+    # --- Time renewal logic ---
+    if action == "renew_time" and data.startswith("add_days_"):
+        days = int(data.replace("add_days_", ""))
+        added_days = days
+
+        output = subprocess.getoutput(f"chage -l {username} 2>/dev/null")
+        current_exp = ""
+        for line in output.splitlines():
+            if "Account expires" in line:
+                current_exp = line.split(":", 1)[1].strip()
+                break
+        
+        now = datetime.now()
+        # If user is already expired, renew from today, otherwise from current expiry date
+        try:
+            current_date = datetime.strptime(current_exp, "%b %d, %Y")
+            start_date = max(now, current_date)
+        except Exception:
+            start_date = now
+
+        new_date = start_date + timedelta(days=days)
+        subprocess.run(["sudo", "chage", "-E", new_date.strftime("%Y-%m-%d"), username], check=False)
+        
+        j = unlock_if_needed(j)
+        j["expire_timestamp"] = int(new_date.timestamp())
+        
+        await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
+        context.user_data["added_days"] = added_days
+
+    # --- Volume renewal logic ---
+    elif action == "renew_volume" and data.startswith("add_gb_"):
+        gb = int(data.replace("add_gb_", ""))
+        added_gb = gb
+        add_kb = gb * 1024 * 1024
+        
+        j["limit"] = int(j.get("limit", 0)) + add_kb
+        # Also update the byte-based limit for consistency
+        j["traffic_limit_bytes"] = int(j.get("traffic_limit_bytes", 0)) + (add_kb * 1024)
+
+        j = unlock_if_needed(j)
+
+        await query.message.reply_text(f"📶 حجم اکانت `{username}` به مقدار {gb}GB افزایش یافت.", parse_mode="Markdown")
+        context.user_data["added_gb"] = added_gb
+    
+    # --- Finalize and save ---
+    atomic_write(limits_file, j)
+
+    # --- FIX: If user was unlocked, run the master script to restore rules ---
+    if user_was_unlocked:
+        run_cmd(["sudo", "bash", FIX_IPTABLES_SCRIPT])
+        log.info(f"User {username} was unlocked during renewal, iptables rules restored.")
+
+    # --- Ask for another renewal ---
+    if action == "renew_time":
+        keyboard = [
+            [InlineKeyboardButton("➕ تمدید حجم", callback_data="renew_volume"),
+             InlineKeyboardButton("❌ خیر", callback_data="end_extend")]
+        ]
+        await query.message.reply_text("آیا می‌خواهید حجم هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ASK_ANOTHER_RENEW
+    else: # action was renew_volume
+        keyboard = [
+            [InlineKeyboardButton("➕ تمدید زمان", callback_data="renew_time"),
+             InlineKeyboardButton("❌ خیر", callback_data="end_extend")]
+        ]
+        await query.message.reply_text("آیا می‌خواهید زمان هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
+        return ASK_ANOTHER_RENEW
+
 
 #
 
@@ -981,6 +1095,7 @@ async def start_unlock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ASK_UNLOCK_USERNAME
 
 #######
+"""
 
 async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.message.text.strip()
@@ -1036,6 +1151,63 @@ async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
 
     return ConversationHandler.END
+"""
+#
+
+async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.message.text.strip()
+    try:
+        uid = int(subprocess.getoutput(f"id -u {username}").strip())
+        if uid < 1000:
+            await update.message.reply_text("⛔️ این کاربر سیستمی است و نمی‌توان آن را باز کرد.")
+            return ConversationHandler.END
+    except Exception:
+        await update.message.reply_text("❌ کاربر یافت نشد.")
+        return ConversationHandler.END
+
+    limit_file_path = f"/etc/sshmanager/limits/{username}.json"
+    try:
+        # Unlock user account
+        run_cmd(["sudo", "passwd", "-u", username])
+        run_cmd(["sudo", "chage", "-E", "-1", username])
+        run_cmd(["sudo", "usermod", "-s", NOLOGIN_PATH, username])
+
+        # --- FIX: Run the master script to restore all necessary iptables rules ---
+        run_cmd(["sudo", "bash", FIX_IPTABLES_SCRIPT])
+
+        # Update the JSON file
+        user_data = {}
+        if os.path.exists(limit_file_path):
+            try:
+                with open(limit_file_path, "r") as f:
+                    user_data = json.load(f)
+            except Exception:
+                user_data = {} # Reset if file is corrupted
+        
+        user_data["is_blocked"] = False
+        user_data["block_reason"] = None
+        user_data["alert_sent"] = False
+        user_data.pop("blocked_at", None)
+        
+        # Atomically write back the changes
+        atomic_write(limit_file_path, user_data)
+
+        await update.message.reply_text(
+            f"✅ اکانت `{username}` با موفقیت باز شد.",
+            parse_mode="Markdown",
+            reply_markup=main_menu_keyboard
+        )
+    except Exception as e:
+        log.exception("unlock failed for %s", username)
+        await update.message.reply_text(
+            f"❌ باز کردن اکانت با خطا مواجه شد. جزئیات در لاگ: {e}",
+            reply_markup=main_menu_keyboard
+        )
+
+    return ConversationHandler.END
+
+
+#
 
 #######
 async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
