@@ -66,6 +66,28 @@ main_menu_keyboard = InlineKeyboardMarkup([
     [InlineKeyboardButton("🖥 گزارش کاربران", callback_data="report_users")],
 ])
 
+###
+
+def _ensure_owner_rule_on_out_chain(uid_str: str) -> None:
+   
+    if not uid_str:
+        return
+    try:
+        rc = subprocess.run(
+            ["sudo", *IPT, "-t", "mangle", "-C", "SSH_USERS_OUT",
+             "-m", "owner", "--uid-owner", uid_str, "-j", "ACCEPT"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True
+        ).returncode
+    except Exception:
+        rc = 1 
+
+    if rc != 0:
+        subprocess.run(
+            ["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS_OUT",
+             "-m", "owner", "--uid-owner", uid_str, "-j", "ACCEPT"],
+            check=False, text=True
+        )
+
 #
 
 def run_cmd(cmd, timeout=30):
@@ -94,7 +116,7 @@ def _ipt_cmd():
         return [ipt, "-w"]
     return [ipt]
 
-IPT = _ipt_cmd()  # مثل ['iptables-legacy', '-w'] یا ['iptables']
+IPT = _ipt_cmd() 
 
 
 def atomic_write(path, data):
@@ -106,7 +128,6 @@ def atomic_write(path, data):
         json.dump(data, f, indent=4)
     os.replace(tmp, path)
 
-#توابع جدید
 # --- utils: units, io, math (FINAL) ---
 
 def safe_int(v, default=0):
@@ -153,13 +174,7 @@ def kb_to_human(kb: int) -> str:
 ####
 
 def update_live_usage(force_run: bool = True) -> None:
-    """
-    بروزرسانی زنده مصرف را به تنها منبع معتبر واگذار می‌کند:
-    /usr/local/bin/log_user_traffic.py
-    - از دوبار‌شماری جلوگیری می‌کند
-    - فقط ترافیک ACCEPT شمرده می‌شود
-    - نوشتن JSON اتمیک است
-    """
+    
     try:
         
         subprocess.run(["systemctl", "start", "log-user-traffic.service"], check=False)
@@ -376,8 +391,7 @@ async def handle_volume_input(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def ask_expire(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # for both callback and message flows this returns expire selection
-    # if called from callback_query, update.callback_query exists; if from message, update.message used earlier
+    
     if hasattr(update, "callback_query") and update.callback_query:
         caller = update.callback_query.message
     else:
@@ -563,27 +577,98 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                     ).returncode
                     if rc != 0:
-                        subprocess.run(
-                            ["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS_UOT", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                            check=False
-                        )
+
+
+
+#کد جدید ادامه کانورسیشن
+
+async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    username = context.user_data.get("renew_username", "")
+    action = context.user_data.get("renew_action", "")
+    data = (query.data or "").strip()
+
+    if not username or not action:
+        await query.message.reply_text("❌ اطلاعات تمدید ناقص است.")
+        return ConversationHandler.END
+
+    # UID کاربر
+    rc, out, err = run_cmd(["id", "-u", username])
+    uid = out.strip() if rc == 0 else ""
+    limits_file = f"/etc/sshmanager/limits/{username}.json"
+
+    # --- تمدید تاریخ ---
+    if action == "renew_time" and data.startswith("add_days_"):
+        days = int(data.replace("add_days_", "") or "0")
+
+        # تاریخ فعلی انقضا (chage)
+        output = subprocess.getoutput(f"chage -l {username} 2>/dev/null")
+        current_exp = ""
+        for line in output.splitlines():
+            if "Account expires" in line:
+                current_exp = line.split(":", 1)[1].strip()
+                break
+
+        if current_exp and current_exp.lower() != "never":
+            try:
+                current_date = datetime.strptime(current_exp, "%b %d, %Y")
+                new_date = current_date + timedelta(days=days)
+            except Exception:
+                new_date = datetime.now() + timedelta(days=days)
+        else:
+            new_date = datetime.now() + timedelta(days=days)
+
+        # اعمال انقضا در سیستم
+        subprocess.run(["sudo", "chage", "-E", new_date.strftime("%Y-%m-%d"), username], check=False)
+
+        # به‌روزرسانی JSON + اگر بلوک موقت بوده، آزادسازی + Rule mangle/owner
+        try:
+            j = {}
+            if os.path.exists(limits_file):
+                with open(limits_file, "r") as f:
+                    j = json.load(f)
+            j["expire_timestamp"] = int(new_date.timestamp())
+
+            # اگر بلوک بوده و دلیلش دستی نیست، آزاد کن + Rule
+            if j.get("is_blocked", False) and j.get("block_reason") != "manual":
+                # آزادسازی سیستم (الگوی قبلی تو: بازگردانی شل به /bin/bash و home)
+                subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=False)
+                subprocess.run(["sudo", "usermod", "-d", f"/home/{username}", username], check=False)
+                subprocess.run(["sudo", "passwd", "-u", username], check=False)
+                subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
+
+                # افزودن Rule در CHAIN درست (mangle/SSH_USERS_OUT) در صورت نبود
+                if uid:
+                    _ensure_owner_rule_on_out_chain(uid)
+
+                # فلگ‌ها
                 j["is_blocked"] = False
                 j["block_reason"] = None
                 j["alert_sent"] = False
 
+            # ذخیرهٔ JSON
             with open(limits_file, "w") as fw:
                 json.dump(j, fw, indent=4, ensure_ascii=False)
         except Exception:
+            # عمداً خطا را نادیده می‌گیریم تا UX کاربر خراب نشود؛ اما اگر logger داری می‌توانی لاگ کنی
             pass
 
-        await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
+        await query.message.reply_text(
+            f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.",
+            parse_mode="Markdown"
+        )
 
         # پیشنهاد تمدید حجم
         keyboard = [
             [InlineKeyboardButton("➕ تمدید حجم", callback_data="renew_volume"),
              InlineKeyboardButton("❌ خیر", callback_data="end_extend")]
         ]
-        await query.message.reply_text("آیا می‌خواهید حجم هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.reply_text(
+            "آیا می‌خواهید حجم هم تمدید شود؟",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return ASK_ANOTHER_RENEW
 
     # --- تمدید حجم ---
@@ -596,10 +681,11 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             if os.path.exists(limits_file):
                 with open(limits_file, "r") as f:
                     j = json.load(f)
+
             old_limit = safe_int(j.get("limit", 0))
             j["limit"] = old_limit + add_kb
 
-            # اگر بلوک بوده و دلیل دستی نبوده، آزادسازی + Rule mangle/owner
+            # اگر بلوک بوده و دلیلش دستی نیست، آزاد کن + Rule
             if j.get("is_blocked", False) and j.get("block_reason") != "manual":
                 subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=False)
                 subprocess.run(["sudo", "usermod", "-d", f"/home/{username}", username], check=False)
@@ -607,15 +693,8 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
 
                 if uid:
-                    rc = subprocess.run(
-                        ["sudo", *IPT, "-t", "mangle", "-C", "SSH_USERS_UOT", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    ).returncode
-                    if rc != 0:
-                        subprocess.run(
-                            ["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS_UOT", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                            check=False
-                        )
+                    _ensure_owner_rule_on_out_chain(uid)
+
                 j["is_blocked"] = False
                 j["block_reason"] = None
                 j["alert_sent"] = False
@@ -625,53 +704,15 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception:
             pass
 
-        await query.message.reply_text(f"📶 {gb}GB به حجم `{username}` اضافه شد.", parse_mode="Markdown")
+        await query.message.reply_text(
+            f"📶 {gb}GB به حجم `{username}` اضافه شد.",
+            parse_mode="Markdown"
+        )
         return ConversationHandler.END
 
     else:
         await query.message.reply_text("❌ ورودی نامعتبر.")
         return ConversationHandler.END
-
-
-#کد جدید ادامه کانورسیشن
-
-async def handle_renew_another_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "renew_time":
-        context.user_data["renew_action"] = "renew_time"
-        keyboard = [
-            [InlineKeyboardButton("۳۰ روز", callback_data="add_days_30"), InlineKeyboardButton("۶۰ روز", callback_data="add_days_60"), InlineKeyboardButton("۹۰ روز", callback_data="add_days_90")],
-            [InlineKeyboardButton("بازگشت", callback_data="cancel")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(f"⏰ زمان اکانت `{context.user_data['renew_username']}` را انتخاب کنید:", reply_markup=reply_markup, parse_mode="Markdown")
-        return ASK_RENEW_VALUE
-
-    elif query.data == "renew_volume":
-        context.user_data["renew_action"] = "renew_volume"
-        keyboard = [
-            [InlineKeyboardButton("5GB", callback_data="add_gb_5"), InlineKeyboardButton("10GB", callback_data="add_gb_10"), InlineKeyboardButton("20GB", callback_data="add_gb_20")],
-            [InlineKeyboardButton("50GB", callback_data="add_gb_50"), InlineKeyboardButton("100GB", callback_data="add_gb_100")],
-            [InlineKeyboardButton("بازگشت", callback_data="cancel")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(f"📊 حجم اکانت `{context.user_data['renew_username']}` را انتخاب کنید:", reply_markup=reply_markup, parse_mode="Markdown")
-        return ASK_RENEW_VALUE
-    
-    # NEW: Handle "No" button correctly which ends the conversation
-    elif query.data == "end_extend":
-        return await end_extend_handler(update, context)
-
-    # Handle cancel button correctly
-    elif query.data == "cancel":
-        await query.message.reply_text("✅ عملیات تمدید لغو شد.")
-        return ConversationHandler.END
-        
-    return ConversationHandler.END
-
-
 
 async def end_extend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
