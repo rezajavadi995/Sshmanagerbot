@@ -873,6 +873,8 @@ async def start_unlock_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.message.reply_text("🔓 لطفا نام کاربری را برای باز کردن اکانت وارد کنید:")
     return ASK_UNLOCK_USERNAME
 
+"""
+
 async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.message.text.strip()
     try:
@@ -923,7 +925,62 @@ async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("❌ باز کردن اکانت با خطا مواجه شد. جزئیات در لاگ.", reply_markup=main_menu_keyboard)
 
     return ConversationHandler.END
+"""
 
+#######
+
+async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    username = update.message.text.strip()
+    try:
+        uid = int(subprocess.getoutput(f"id -u {username}").strip())
+        if uid < 1000:
+            await update.message.reply_text("⛔️ این کاربر سیستمی است و نمی‌توان آن را باز کرد.")
+            return ConversationHandler.END
+    except Exception:
+        await update.message.reply_text("❌ کاربر یافت نشد.")
+        return ConversationHandler.END
+
+    limit_file_path = f"/etc/sshmanager/limits/{username}.json"
+    try:
+        # آنلاک
+        run_cmd(["sudo", "passwd", "-u", username])         # unlock password
+        run_cmd(["sudo", "chage", "-E", "-1", username])    # remove expire
+        run_cmd(["sudo", "usermod", "-s", NOLOGIN_PATH, username])  # شِل طبق سیاست شما (تونل‌-اُلی)
+
+        # تضمین Rule در جدول درست (mangle/SSH_USERS)
+        rc, out, err = run_cmd(["id", "-u", username])
+        uid_s = out.strip() if rc == 0 else ""
+        if uid_s.isdigit():
+            rc2, _, _ = run_cmd(["sudo", *IPT, "-t", "mangle", "-C", "SSH_USERS",
+                                 "-m", "owner", "--uid-owner", uid_s, "-j", "ACCEPT"])
+            if rc2 != 0:
+                run_cmd(["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS",
+                        "-m", "owner", "--uid-owner", uid_s, "-j", "ACCEPT"])
+
+        # به‌روزرسانی JSON
+        if os.path.exists(limit_file_path):
+            try:
+                with open(limit_file_path, "r") as f:
+                    user_data = json.load(f)
+            except Exception:
+                user_data = {}
+            user_data["is_blocked"] = False
+            user_data["block_reason"] = None
+            user_data["alert_sent"] = False
+            user_data.pop("blocked_at", None)
+            try:
+                with open(limit_file_path, "w") as f:
+                    json.dump(user_data, f, indent=4, ensure_ascii=False)
+            except Exception:
+                pass
+
+        # اگر کیبورد اصلی داری، همین‌جا استفاده کن؛ در غیر این صورت این خط را ساده بگذار
+        await update.message.reply_text(f"✅ اکانت `{username}` با موفقیت باز شد.", parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text("❌ باز کردن اکانت با خطا مواجه شد. جزئیات در لاگ.")
+    return ConversationHandler.END
+
+#######
 async def show_limited_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     if update.effective_user.id != ADMIN_ID:
