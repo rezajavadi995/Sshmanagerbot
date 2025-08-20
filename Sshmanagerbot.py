@@ -718,7 +718,7 @@ async def end_extend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 # ---------- create / delete / lock / unlock / listing handlers ----------
-
+"""
 async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -793,6 +793,90 @@ async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(f"❌ خطای پیش‌بینی‌نشده:\n{e}")
     return ConversationHandler.END
     
+
+
+"""
+#
+
+async def make_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.from_user.id != ADMIN_ID:
+        return ConversationHandler.END
+    username = context.user_data.get("username","").strip()
+    if not username:
+        await query.message.reply_text("❌ یوزرنیم یافت نشد.")
+        return ConversationHandler.END
+    # avoid system users
+    uid_check = subprocess.getoutput(f"id -u {username}")
+    if uid_check.isdigit() and int(uid_check) < 1000:
+        await query.message.reply_text("⛔️ نام کاربری سیستمی است.")
+        return ConversationHandler.END
+
+    password = random_str(12)
+    acc_type = context.user_data.get("acc_type","unlimited")
+    
+    # Get the volume directly in KB from user_data
+    limit_kb = int(context.user_data.get("volume", 0))  
+    
+    period = query.data.replace("expire_","")
+    if period.endswith("h"):
+        delta = timedelta(hours=int(period.replace("h","")))
+        expire_date = datetime.now() + delta
+        period_str = "۲ ساعته تستی"
+    else:
+        days = int(period.replace("d",""))
+        expire_date = datetime.now() + timedelta(days=days)
+        period_str = f"{days} روزه"
+    expire_str = expire_date.strftime("%Y-%m-%d %H:%M")
+    try:
+        # ensure not exists
+        check_user = subprocess.getoutput(f"id -u {username} 2>/dev/null")
+        if check_user.isdigit():
+            await query.message.reply_text("❌ این یوزرنیم قبلاً وجود دارد.")
+            return ConversationHandler.END
+        # create user without home and with nologin shell
+        subprocess.run(["sudo","useradd","-M","-s",NOLOGIN_PATH,username], check=True)
+        # set password
+        subprocess.run(["sudo","chpasswd"], input=f"{username}:{password}".encode(), check=True)
+        # set expiration
+        subprocess.run(["sudo","chage","-E",expire_date.strftime("%Y-%m-%d"), username], check=True)
+        
+        # --- FIX: Instead of manually adding a rule, run the master script ---
+        # This ensures the user is added to ALL correct chains (OUT, FWD, MARK)
+        subprocess.run(["sudo", "bash", FIX_IPTABLES_SCRIPT], check=False)
+        
+        # create limits file if limited
+        if acc_type == "limited":
+            limits_dir = Path("/etc/sshmanager/limits")
+            limits_dir.mkdir(parents=True, exist_ok=True)
+            limit_file = limits_dir / f"{username}.json"
+            data = {
+                "limit": limit_kb,
+                "used": 0,
+                "type": "limited",
+                "expire": expire_str,
+                "expire_timestamp": int(expire_date.timestamp()),
+                "start_timestamp": int(datetime.now().timestamp()),
+                "is_blocked": False,
+                "block_reason": None,
+                "traffic_limit_bytes": limit_kb * 1024, # Add this for consistency
+                "traffic_used_bytes": 0,
+                "last_iptables_bytes": 0
+            }
+            with open(limit_file,"w") as f:
+                json.dump(data,f, indent=4)
+                
+        await query.message.reply_text(f"✅ اکانت ساخته شد ({period_str}):\n\n{format_config(username,password,expire_str)}")
+    except subprocess.CalledProcessError as e:
+        await query.message.reply_text(f"❌ خطا در ساخت اکانت:\n{e}")
+    except Exception as e:
+        await query.message.reply_text(f"❌ خطای پیش‌بینی‌نشده:\n{e}")
+    return ConversationHandler.END
+
+
+#
+
 # تابع جدید برای شروع مکالمه حذف اکانت
 async def start_delete_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
