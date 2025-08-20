@@ -558,12 +558,12 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 if uid:
                     # -C در mangle/CHAIN
                     rc = subprocess.run(
-                        ["sudo", *IPT, "-t", "mangle", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                        ["sudo", *IPT, "-t", "mangle", "-C", "SSH_USERS_UOT", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                     ).returncode
                     if rc != 0:
                         subprocess.run(
-                            ["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                            ["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS_UOT", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                             check=False
                         )
                 j["is_blocked"] = False
@@ -607,12 +607,12 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
 
                 if uid:
                     rc = subprocess.run(
-                        ["sudo", *IPT, "-t", "mangle", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                        ["sudo", *IPT, "-t", "mangle", "-C", "SSH_USERS_UOT", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                     ).returncode
                     if rc != 0:
                         subprocess.run(
-                            ["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                            ["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS_UOT", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                             check=False
                         )
                 j["is_blocked"] = False
@@ -951,10 +951,10 @@ async def handle_unlock_input(update: Update, context: ContextTypes.DEFAULT_TYPE
         rc, out, err = run_cmd(["id", "-u", username])
         uid_s = out.strip() if rc == 0 else ""
         if uid_s.isdigit():
-            rc2, _, _ = run_cmd(["sudo", *IPT, "-t", "mangle", "-C", "SSH_USERS",
+            rc2, _, _ = run_cmd(["sudo", *IPT, "-t", "mangle", "-C", "SSH_USERS_UOT",
                                  "-m", "owner", "--uid-owner", uid_s, "-j", "ACCEPT"])
             if rc2 != 0:
-                run_cmd(["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS",
+                run_cmd(["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS_UOT",
                         "-m", "owner", "--uid-owner", uid_s, "-j", "ACCEPT"])
 
         # به‌روزرسانی JSON
