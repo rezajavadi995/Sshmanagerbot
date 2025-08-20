@@ -1,4 +1,4 @@
-/root/sshmanager/lock_user.py
+#/root/sshmanager/lock_user.py
 cat > /root/sshmanager/lock_user.py << 'EOF'
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
