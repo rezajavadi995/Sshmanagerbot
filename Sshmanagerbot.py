@@ -11,6 +11,7 @@ import socket
 import json
 import pwd
 import logging
+import shutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
