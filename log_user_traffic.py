@@ -7,7 +7,8 @@ cat > /usr/local/bin/log_user_traffic.py << 'EOF'
 import os, re, json, subprocess, time, pwd, tempfile, shutil
 
 LIMITS_DIR = "/etc/sshmanager/limits"
-CHAIN_NAME = "SSH_USERS"
+#CHAIN_NAME = "SSH_USERS"
+CHAIN_NAME = "SSH_USERS_OUT"
 DEBUG_DIR  = "/etc/sshmanager/logs"
 DEBUG_LOG  = os.path.join(DEBUG_DIR, "log_user_traffic.log")
 
