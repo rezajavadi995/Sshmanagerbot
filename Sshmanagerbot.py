@@ -80,6 +80,22 @@ def run_cmd(cmd, timeout=30):
         log.exception("run_cmd unexpected error: %s", cmd)
         return 1, "", str(e)
 
+#new code cmd 
+
+def _ipt_cmd():
+    """
+    انتخاب صحیح باینری iptables با پشتیبانی -w
+    """
+    ipt = "iptables-legacy" if (subprocess.call(["which", "iptables-legacy"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0) else "iptables"
+    # تست پشتیبانی -w
+    test = subprocess.run([ipt, "-w", "-L"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, text=True)
+    if test.returncode == 0:
+        return [ipt, "-w"]
+    return [ipt]
+
+IPT = _ipt_cmd()  # مثل ['iptables-legacy', '-w'] یا ['iptables']
+
+
 def atomic_write(path, data):
     """
     ذخیره امن JSON
