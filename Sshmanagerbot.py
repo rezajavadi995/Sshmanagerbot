@@ -510,14 +510,16 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.reply_text("❌ اطلاعات تمدید ناقص است.")
         return ConversationHandler.END
 
-    # UID
+    # UID کاربر
     rc, out, err = run_cmd(["id", "-u", username])
     uid = out.strip() if rc == 0 else ""
     limits_file = f"/etc/sshmanager/limits/{username}.json"
 
+    # --- تمدید تاریخ ---
     if action == "renew_time" and data.startswith("add_days_"):
         days = int(data.replace("add_days_", "") or "0")
-        # تاریخ فعلی انقضا
+
+        # تاریخ فعلی انقضا (chage)
         output = subprocess.getoutput(f"chage -l {username} 2>/dev/null")
         current_exp = ""
         for line in output.splitlines():
@@ -534,31 +536,34 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             new_date = datetime.now() + timedelta(days=days)
 
-        # تمدید در سیستم
+        # اعمال انقضا در سیستم
         subprocess.run(["sudo", "chage", "-E", new_date.strftime("%Y-%m-%d"), username], check=False)
 
-        # JSON
+        # به روز کردن JSON + اگر بلوک موقت بوده، آزادسازی + Rule mangle/owner
         try:
             j = {}
             if os.path.exists(limits_file):
                 with open(limits_file, "r") as f:
                     j = json.load(f)
             j["expire_timestamp"] = int(new_date.timestamp())
-            # اگر بلوک موقت بوده، آزاد کن
+
             if j.get("is_blocked", False) and j.get("block_reason") != "manual":
+                # آزادسازی سیستم
                 subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=False)
                 subprocess.run(["sudo", "usermod", "-d", f"/home/{username}", username], check=False)
                 subprocess.run(["sudo", "passwd", "-u", username], check=False)
                 subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
-                # iptables rule را اگر نبود، اضافه کن
+
+                # افزودن Rule در CHAIN درست (mangle) در صورت نبود
                 if uid:
+                    # -C در mangle/CHAIN
                     rc = subprocess.run(
-                        ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                        stderr=subprocess.DEVNULL
+                        ["sudo", *IPT, "-t", "mangle", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                     ).returncode
                     if rc != 0:
                         subprocess.run(
-                            ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                            ["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                             check=False
                         )
                 j["is_blocked"] = False
@@ -566,11 +571,12 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 j["alert_sent"] = False
 
             with open(limits_file, "w") as fw:
-                json.dump(j, fw, indent=4)
+                json.dump(j, fw, indent=4, ensure_ascii=False)
         except Exception:
             pass
 
         await query.message.reply_text(f"⏳ {days} روز به تاریخ انقضای `{username}` اضافه شد.", parse_mode="Markdown")
+
         # پیشنهاد تمدید حجم
         keyboard = [
             [InlineKeyboardButton("➕ تمدید حجم", callback_data="renew_volume"),
@@ -579,6 +585,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.reply_text("آیا می‌خواهید حجم هم تمدید شود؟", reply_markup=InlineKeyboardMarkup(keyboard))
         return ASK_ANOTHER_RENEW
 
+    # --- تمدید حجم ---
     elif action == "renew_volume" and data.startswith("add_gb_"):
         gb = int(data.replace("add_gb_", "") or "0")
         add_kb = gb * 1024 * 1024
@@ -591,20 +598,21 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
             old_limit = safe_int(j.get("limit", 0))
             j["limit"] = old_limit + add_kb
 
-            # اگر بلوک بوده و دلیلش دستی نیست، آزاد کن + rule
+            # اگر بلوک بوده و دلیل دستی نبوده، آزادسازی + Rule mangle/owner
             if j.get("is_blocked", False) and j.get("block_reason") != "manual":
                 subprocess.run(["sudo", "usermod", "-s", "/bin/bash", username], check=False)
                 subprocess.run(["sudo", "usermod", "-d", f"/home/{username}", username], check=False)
                 subprocess.run(["sudo", "passwd", "-u", username], check=False)
                 subprocess.run(["sudo", "chage", "-E", "-1", username], check=False)
+
                 if uid:
                     rc = subprocess.run(
-                        ["sudo", "iptables", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
-                        stderr=subprocess.DEVNULL
+                        ["sudo", *IPT, "-t", "mangle", "-C", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                     ).returncode
                     if rc != 0:
                         subprocess.run(
-                            ["sudo", "iptables", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
+                            ["sudo", *IPT, "-t", "mangle", "-A", "SSH_USERS", "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"],
                             check=False
                         )
                 j["is_blocked"] = False
@@ -612,7 +620,7 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
                 j["alert_sent"] = False
 
             with open(limits_file, "w") as fw:
-                json.dump(j, fw, indent=4)
+                json.dump(j, fw, indent=4, ensure_ascii=False)
         except Exception:
             pass
 
@@ -622,7 +630,6 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         await query.message.reply_text("❌ ورودی نامعتبر.")
         return ConversationHandler.END
-
 
 
 #کد جدید ادامه کانورسیشن
