@@ -649,6 +649,47 @@ async def handle_extend_value(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.reply_text("❌ ورودی نامعتبر.")
         return ConversationHandler.END
 
+#
+
+async def handle_renew_another_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "renew_time":
+        context.user_data["renew_action"] = "renew_time"
+        keyboard = [
+            [InlineKeyboardButton("۳۰ روز", callback_data="add_days_30"), InlineKeyboardButton("۶۰ روز", callback_data="add_days_60"), InlineKeyboardButton("۹۰ روز", callback_data="add_days_90")],
+            [InlineKeyboardButton("بازگشت", callback_data="cancel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"⏰ زمان اکانت `{context.user_data['renew_username']}` را انتخاب کنید:", reply_markup=reply_markup, parse_mode="Markdown")
+        return ASK_RENEW_VALUE
+
+    elif query.data == "renew_volume":
+        context.user_data["renew_action"] = "renew_volume"
+        keyboard = [
+            [InlineKeyboardButton("5GB", callback_data="add_gb_5"), InlineKeyboardButton("10GB", callback_data="add_gb_10"), InlineKeyboardButton("20GB", callback_data="add_gb_20")],
+            [InlineKeyboardButton("50GB", callback_data="add_gb_50"), InlineKeyboardButton("100GB", callback_data="add_gb_100")],
+            [InlineKeyboardButton("بازگشت", callback_data="cancel")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"📊 حجم اکانت `{context.user_data['renew_username']}` را انتخاب کنید:", reply_markup=reply_markup, parse_mode="Markdown")
+        return ASK_RENEW_VALUE
+
+    # NEW: Handle "No" button correctly which ends the conversation
+    elif query.data == "end_extend":
+        return await end_extend_handler(update, context)
+
+    # Handle cancel button correctly
+    elif query.data == "cancel":
+        await query.message.reply_text("✅ عملیات تمدید لغو شد.")
+        return ConversationHandler.END
+
+    return ConversationHandler.END
+
+
+#
+
 async def end_extend_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     username = context.user_data.get("renew_username", "نامشخص")
