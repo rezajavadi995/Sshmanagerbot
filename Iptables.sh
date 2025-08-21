@@ -52,14 +52,17 @@ done
 
 echo "[OK] iptables updated: users=$(ls $LIMITS_DIR/*.json 2>/dev/null | wc -l)"
 EOF
+
+
+######
 chmod +x /root/fix-iptables.sh
 
 
 
-
-systemctl daemon-reload || true
-systemctl start fix-iptables.service 2>/dev/null || bash /root/fix-iptables.sh
-
+systemctl stop fix-iptables.service
+systemctl daemon-reload
+systemctl enable --now fix-iptables.service
+systemctl start fix-iptables.service
 
 chmod +x /root/fix-iptables.sh
 systemctl enable --now fix-iptables.service
