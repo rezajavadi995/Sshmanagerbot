@@ -20,7 +20,7 @@ for c in $CHAIN_OUT $CHAIN_FWD $CHAIN_MARK; do
     $IPT -t mangle -F $c
 done
 
-# زنجیره‌ها رو به جریان شبکه متصل کن (یکبار)
+# اتصال chainها به جریان شبکه
 $IPT -t mangle -C OUTPUT -j $CHAIN_OUT 2>/dev/null || $IPT -t mangle -A OUTPUT -j $CHAIN_OUT
 $IPT -t mangle -C FORWARD -j $CHAIN_FWD 2>/dev/null || $IPT -t mangle -A FORWARD -j $CHAIN_FWD
 
@@ -34,19 +34,24 @@ for f in "$LIMITS_DIR"/*.json; do
     # تولید mark یکتا
     mark_hex=$(printf "0x%X" $((0x10000 + uid)))
 
-    # رول خروجی: بر اساس owner mark بزن
+    # --- رول‌های OUTPUT ---
+    # مارک زدن
     $IPT -t mangle -A $CHAIN_OUT -m owner --uid-owner "$uid" \
-        -m comment --comment "sshmanager:user=$user;uid=$uid;mode=owner" \
+        -m comment --comment "sshmanager:user=$user;uid=$uid;mode=owner-mark" \
         -j CONNMARK --set-mark "$mark_hex"
 
-    # رول forward: بر اساس mark شمارش کن
+    # شمارش بایت‌ها
+    $IPT -t mangle -A $CHAIN_OUT -m owner --uid-owner "$uid" \
+        -m comment --comment "sshmanager:user=$user;uid=$uid;mode=owner-count" \
+        -j ACCEPT
+
+    # --- رول‌های FORWARD ---
     $IPT -t mangle -A $CHAIN_FWD -m connmark --mark "$mark_hex" \
         -m comment --comment "sshmanager:user=$user;uid=$uid;mode=connmark;mark=$mark_hex" \
         -j ACCEPT
 done
 
-echo "[OK] iptables updated: users=$(ls $LIMITS_DIR/*.json 2>/dev/null | wc -l)"
-EOF
+echo "[OK] iptables updated: users=$(ls $LIMITS_DIR/*.json 2>/dev/null | wc -l)"EOF
 
 
 chmod +x /root/fix-iptables.sh
