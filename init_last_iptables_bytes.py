@@ -5,15 +5,16 @@ sudo tee /usr/local/bin/init_last_iptables_bytes.py > /dev/null <<'PY'
 import os, re, json, pwd, subprocess, time
 
 LIMITS_DIR = "/etc/sshmanager/limits"
-CHAIN_NAME = "SSH_USERS"
+# --- FIX: Define both chains to read from, consistent with log_user_traffic.py ---
+CHAINS_TO_LOG = ["SSH_USERS_OUT", "SSH_USERS_FWD"]
 DEBUG_DIR  = "/var/log/sshmanager"
 DEBUG_LOG  = os.path.join(DEBUG_DIR, "init-last-iptables-debug.log")
 
-CHAIN_RE   = re.compile(rf"^-A\s+{CHAIN_NAME}\b")
+# --- FIX: Compile regex for each chain ---
+CHAIN_RES  = {name: re.compile(rf"^-A\s+{re.escape(name)}\b") for name in CHAINS_TO_LOG}
 COUNTERS   = re.compile(r"(?:-c\s+(\d+)\s+(\d+)|\[(\d+):(\d+)\])")
 COMMENT    = re.compile(r'-m\s+comment\s+--comment\s+"([^"]+)"')
 UID_OWNER  = re.compile(r"--uid-owner\s+(\d+)\b")
-CGROUPPATH = re.compile(r"--path\s+([^\s]+)")
 
 def log(msg):
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -35,18 +36,11 @@ def run_iptables_save():
         out = (p.stdout or "")
         if out.strip():
             return out
-    for cmd in (["/usr/sbin/iptables-save"], ["iptables-save"], ["/usr/sbin/iptables-legacy-save"]):
-        p = run(cmd)
-        out = (p.stdout or "")
-        if out.strip():
-            return out
-    return ""
+    return "" # Fallback to no-counter version is not needed here
 
 def safe_int(x, d=0):
     try: return int(x)
-    except Exception:
-        try: return int(float(x))
-        except Exception: return d
+    except Exception: return d
 
 def uid_to_username(uid: int):
     try: return pwd.getpwuid(uid).pw_name
@@ -56,7 +50,10 @@ def current_bytes_per_user(text: str):
     agg = {}
     if not text: return agg
     for ln in text.splitlines():
-        if not CHAIN_RE.search(ln): continue
+        is_target_chain = any(chain_re.search(ln) for chain_re in CHAIN_RES.values())
+        if not is_target_chain:
+            continue
+            
         mctr = COUNTERS.search(ln)
         if not mctr: continue
         g = mctr.groups()
@@ -66,14 +63,9 @@ def current_bytes_per_user(text: str):
         user = None
         mcom = COMMENT.search(ln)
         if mcom:
-            tags = {}
-            for part in mcom.group(1).split(";"):
-                part = part.strip()
-                if "=" in part:
-                    k,v = part.split("=",1)
-                    tags[k.strip()] = v.strip()
-                else:
-                    tags[part] = True
+            comment_text = mcom.group(1)
+            # A more robust way to parse comment
+            tags = dict(part.split("=", 1) for part in comment_text.split(";") if "=" in part)
             user = tags.get("sshmanager:user") or tags.get("user")
 
         if not user:
@@ -83,18 +75,9 @@ def current_bytes_per_user(text: str):
                 if uid is not None:
                     user = uid_to_username(uid)
 
-        if not user and mcom:
-            # cgroup path fallback (قدیمی)
-            txt = mcom.group(1)
-            m = re.search(r"user-(\d+)\.slice", txt)
-            if m:
-                uid = safe_int(m.group(1), None)
-                if uid is not None:
-                    user = uid_to_username(uid)
-
         if user:
             agg[user] = agg.get(user, 0) + bytes_count
-
+            
     return agg
 
 def main():
@@ -110,28 +93,39 @@ def main():
     agg = current_bytes_per_user(dump)
     changed = 0
     now = int(time.time())
-    for user, cur_bytes in agg.items():
+    
+    # Also initialize for users that exist in limits but have no traffic yet
+    all_limit_users = {fn[:-5] for fn in os.listdir(LIMITS_DIR) if fn.endswith(".json")}
+    
+    for user in all_limit_users:
         path = os.path.join(LIMITS_DIR, f"{user}.json")
-        if not os.path.exists(path):
-            continue
+        cur_bytes = agg.get(user, 0) # Get current bytes or 0 if no traffic
+        
         try:
             with open(path, "r", encoding="utf-8") as f:
                 j = json.load(f)
         except Exception:
             j = {}
+            
         old = j.get("last_iptables_bytes", None)
+        # Initialize if it's not set or doesn't match
         if not isinstance(old, int) or old != int(cur_bytes):
             j["last_iptables_bytes"] = int(cur_bytes)
-            j["last_checked"] = now
+            # Only update last_checked if we actually change the bytes
+            if old != int(cur_bytes):
+                j["last_checked"] = now
+            
             with open(path, "w", encoding="utf-8") as fw:
                 json.dump(j, fw, ensure_ascii=False, indent=2)
             changed += 1
-            log(f"{user}: last_iptables_bytes={cur_bytes} (was: {old})")
-    log(f"Done. changed={changed}")
+            log(f"{user}: Initialized last_iptables_bytes={cur_bytes} (was: {old})")
+            
+    log(f"Done. Initialized/checked {len(all_limit_users)} users, changed={changed}")
     return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 PY
 #############
