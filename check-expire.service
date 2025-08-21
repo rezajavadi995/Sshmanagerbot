@@ -11,3 +11,13 @@ ExecStart=/usr/bin/python3 /usr/local/bin/check_users_expire.py
 [Install]
 WantedBy=multi-user.target
 EOF
+#
+
+# برای اعمال تغییرات در فایل‌های سرویس
+sudo systemctl daemon-reload
+
+# برای فعال و اجرا کردن تایمر (این تایمر خودش سرویس را اجرا می‌کند)
+sudo systemctl enable --now check-expire.timer
+
+# برای اجرای دستی و یک-باره سرویس (جهت تست)
+sudo systemctl start check-expire.service
