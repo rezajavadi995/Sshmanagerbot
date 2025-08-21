@@ -4,7 +4,6 @@ set -euo pipefail
 
 CHAIN_OUT="SSH_USERS_OUT"
 CHAIN_FWD="SSH_USERS_FWD"
-CHAIN_MARK="SSH_MARK"
 LIMITS_DIR="/etc/sshmanager/limits"
 
 # انتخاب iptables
@@ -15,7 +14,7 @@ else
 fi
 
 # اطمینان از وجود chainها
-for c in $CHAIN_OUT $CHAIN_FWD $CHAIN_MARK; do
+for c in $CHAIN_OUT $CHAIN_FWD; do
     $IPT -t mangle -N $c 2>/dev/null || true
     $IPT -t mangle -F $c
 done
@@ -53,8 +52,6 @@ done
 
 echo "[OK] iptables updated: users=$(ls $LIMITS_DIR/*.json 2>/dev/null | wc -l)"
 EOF
-
-
 chmod +x /root/fix-iptables.sh
 
 
