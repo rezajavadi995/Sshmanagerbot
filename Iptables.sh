@@ -51,7 +51,8 @@ for f in "$LIMITS_DIR"/*.json; do
         -j ACCEPT
 done
 
-echo "[OK] iptables updated: users=$(ls $LIMITS_DIR/*.json 2>/dev/null | wc -l)"EOF
+echo "[OK] iptables updated: users=$(ls $LIMITS_DIR/*.json 2>/dev/null | wc -l)"
+EOF
 
 
 chmod +x /root/fix-iptables.sh
