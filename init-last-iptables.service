@@ -1,7 +1,7 @@
 cat > /etc/systemd/system/init-last-iptables.service << 'EOF'
 
 [Unit]
-Description=Initialize last_iptables_bytes for SSH users
+Description=Initialize last_iptables_bytes per user
 After=fix-iptables.service network-online.target
 Wants=fix-iptables.service network-online.target
 ConditionPathExists=/etc/sshmanager/limits
