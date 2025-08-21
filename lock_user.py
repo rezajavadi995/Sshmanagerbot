@@ -2,7 +2,7 @@
 cat > /root/sshmanager/lock_user.py << 'EOF'
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import subprocess, sys, requests, json, os, logging
+import subprocess, sys, requests, json, os, logging, time
 from datetime import datetime
 
 BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
@@ -10,9 +10,7 @@ ADMIN_ID = 8062924341
 LIMITS_DIR = "/etc/sshmanager/limits"
 LOG_FILE = "/var/log/sshmanager-traffic.log"
 NOLOGIN_PATHS = ["/usr/sbin/nologin", "/sbin/nologin", "/usr/bin/nologin"]
-
-# --- FIX: Define the correct chains to interact with ---
-IPTABLES_CHAINS_TO_CLEAR = ["SSH_USERS_OUT", "SSH_USERS_FWD", "SSH_MARK"]
+FIX_IPTABLES_SCRIPT = "/root/fix-iptables.sh"
 
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("lock_user")
@@ -21,32 +19,24 @@ def run_cmd(cmd, timeout=30):
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
         return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
-    except subprocess.TimeoutExpired as e:
-        return 124, "", f"timeout: {e}"
     except Exception as e:
         log.exception("run_cmd unexpected error: %s", cmd)
         return 1, "", str(e)
 
 def send_telegram_message(text):
+    if not BOT_TOKEN or not ADMIN_ID: return
     try:
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                       data={"chat_id": ADMIN_ID, "text": text, "parse_mode":"Markdown"},
-                      timeout=5)
+                      timeout=10)
     except Exception as e:
         log.warning("Failed to send telegram message: %s", e)
 
 def atomic_write(path, data):
-    tmp = f"{path}.tmp"
-    with open(tmp, "w") as f:
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
     os.replace(tmp, path)
-
-def _is_benign_usermod_err(err_text):
-    if not err_text: return False
-    txt = err_text.lower()
-    for p in ["currently used by process", "cannot lock the user record"]:
-        if p in txt: return True
-    return False
 
 def _first_existing(pths):
     for p in pths:
@@ -56,26 +46,33 @@ def _first_existing(pths):
 def lock_user(username, reason="quota"):
     failures, warnings, successes = [], [], []
 
-    nologin = _first_existing(NOLOGIN_PATHS)
-
-    for cmd in (["usermod","-s", nologin, username],
-                ["usermod","-d","/nonexistent", username],
-                ["passwd","-l", username]):
-        rc, out, err = run_cmd(cmd)
-        if rc == 0: successes.append(" ".join(cmd))
-        else:
-            (_is_benign_usermod_err(err or out) and
-             warnings.append(f"cmd warn: {' '.join(cmd)} | rc={rc} | msg={err or out}")) or \
-            failures.append(f"cmd failed: {' '.join(cmd)} | rc={rc} | err={err or out}")
-
+    # 1. Kill user processes first and wait
     rc, out, err = run_cmd(["pkill", "-u", username])
-    (rc in (0,1) and successes.append("pkill")) or failures.append(f"pkill rc={rc} err={err}")
+    if rc in (0, 1): # 0 = killed, 1 = no process found
+        successes.append("pkill")
+        time.sleep(0.5)
+    else:
+        warnings.append(f"pkill may have failed: rc={rc} err={err or out}")
 
+    # 2. Modify user account
+    nologin = _first_existing(NOLOGIN_PATHS)
+    for cmd_tuple in (
+        (["usermod", "-s", nologin, username], "Shell set to nologin"),
+        (["passwd", "-l", username], "Password locked"),
+    ):
+        rc, out, err = run_cmd(cmd_tuple[0])
+        if rc == 0:
+            successes.append(cmd_tuple[1])
+        else:
+            # It's not critical, so we'll log it as a warning
+            warnings.append(f"Command '{' '.join(cmd_tuple[0])}' failed: {err or out}")
+
+    # 3. Update the JSON file to reflect the locked state
     limit_file_path = os.path.join(LIMITS_DIR, f"{username}.json")
     try:
         data = {}
         if os.path.exists(limit_file_path):
-            try: data = json.load(open(limit_file_path)) or {}
+            try: data = json.load(open(limit_file_path, "r", encoding="utf-8")) or {}
             except Exception: data = {}
         data["is_blocked"] = True
         data["blocked_at"] = int(datetime.now().timestamp())
@@ -83,71 +80,56 @@ def lock_user(username, reason="quota"):
         data["alert_sent"] = True
         os.makedirs(LIMITS_DIR, exist_ok=True)
         atomic_write(limit_file_path, data)
-        successes.append("limits-file-updated")
+        successes.append("JSON file marked as blocked")
     except Exception as e:
-        failures.append(f"write limits failed: {e}")
-
-    rc, out, err = run_cmd(["id","-u", username])
-    uid = out.strip() if rc == 0 else ""
-    if uid.isdigit():
-        # --- FIX: Clear rules from all relevant chains ---
-        removed_any = False
-        for chain in IPTABLES_CHAINS_TO_CLEAR:
-             # Deleting rules idempotently (loop until all matching rules are gone)
-            while True:
-                # Note: The rules might be slightly different in each chain
-                # We target the most common pattern: owner matching
-                rc2, _, _ = run_cmd(["iptables", "-t", "mangle", "-D", chain, "-m", "owner", "--uid-owner", uid, "-j", "ACCEPT"])
-                rc3, _, _ = run_cmd(["iptables", "-t", "mangle", "-D", chain, "-m", "owner", "--uid-owner", uid, "-j", "MARK"])
-                rc4, _, _ = run_cmd(["iptables", "-t", "mangle", "-D", chain, "-m", "owner", "--uid-owner", uid, "-j", "CONNMARK"])
-                
-                # If any deletion was successful, mark it and continue
-                if rc2 == 0 or rc3 == 0 or rc4 == 0:
-                    removed_any = True
-                    continue
-                
-                # No more rules for this UID in this chain
-                break
-        
-        successes.append("iptables-cleared" if removed_any else "iptables-not-present")
+        failures.append(f"Failed to write limits file: {e}")
+    
+    # 4. Run the master iptables script. It will automatically remove rules for locked users.
+    if os.path.exists(FIX_IPTABLES_SCRIPT):
+        rc_fix, out_fix, err_fix = run_cmd(["sudo", "bash", FIX_IPTABLES_SCRIPT])
+        if rc_fix == 0:
+            successes.append("iptables rules synchronized")
+        else:
+            warnings.append(f"iptables script had an error: {err_fix}")
     else:
-        warnings.append("cannot get uid for user")
+        warnings.append(f"iptables script not found at {FIX_IPTABLES_SCRIPT}")
 
+    # 5. Report the result
     reason_map = {"quota":"اتمام حجم","expire":"اتمام تاریخ انقضا","manual":"قفل دستی"}
-    header = f"🔒 تلاش برای قفل `{username}` — نتیجه:\n"
-    summary_lines = []
+    reason_text = reason_map.get(reason, reason)
+    
     if failures:
-        summary_lines.append("❌ خطا(های مهم) وجود دارد:")
-        summary_lines += [f"- {f}" for f in failures]
-    elif warnings:
-        summary_lines.append("⚠️ هشدار(ها) وجود دارد (عملیات اصلی انجام شده):")
-        summary_lines += [f"- {w}" for w in warnings]
+        status = "❌ قفل ناموفق"
+        summary_lines = [f"- {f}" for f in failures]
     else:
-        summary_lines.append(f"✅ اکانت `{username}` با موفقیت به دلیل *{reason_map.get(reason, reason)}* مسدود شد.")
+        status = "✅ قفل موفق" if not warnings else "⚠️ قفل با هشدار"
+        summary_lines = [f"کاربر `{username}` به دلیل *{reason_text}* مسدود شد."]
 
-    details = ""
-    details += f"فایل محدودیت: {limit_file_path}\n"
-    details += f"وضعیت فایل limits: {'به‌روزرسانی شد' if os.path.exists(limit_file_path) else 'وجود ندارد'}\n"
-    details += f"موفقیت‌ها: {', '.join(successes) or '-'}\n"
-    if warnings: details += "هشدارها:\n" + "\n".join(warnings) + "\n"
-    if failures: details += "خطاها:\n" + "\n".join(failures) + "\n"
-    details += f"\nلاگ: {LOG_FILE}"
+    details = "```\n" + "\n".join(successes) + "\n"
+    if warnings:
+        details += "\nWarnings:\n" + "\n".join(warnings) + "\n"
+    details += "```"
 
-    send_telegram_message(header + "\n" + "\n".join(summary_lines) + "\n\n" + "```\n" + details + "\n```")
+    message = f"🔒 **{status}**\n\n" + "\n".join(summary_lines) + "\n\n**جزئیات عملیات:**\n" + details
+    send_telegram_message(message)
 
-    if failures: log.warning("lock_user partial failures for %s: %s", username, failures)
-    else: log.info("User %s locked (reason=%s) — successes: %s warnings: %s", username, reason, successes, warnings)
-
-    return not failures
+    if failures:
+        log.error("lock_user failed for %s: %s", username, failures)
+        return False
+    
+    log.info("User %s locked (reason=%s) — successes: %s warnings: %s", username, reason, successes, warnings)
+    return True
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python3 lock_user.py <username> [reason]")
+        print(f"Usage: {sys.argv[0]} <username> [reason: quota|expire|manual]")
         sys.exit(1)
     username = sys.argv[1]
-    reason = sys.argv[2] if len(sys.argv) > 2 else "quota"
-    ok = lock_user(username, reason)
-    sys.exit(0 if ok else 2)
+    reason = sys.argv[2] if len(sys.argv) > 2 else "manual"
+    if lock_user(username, reason):
+        sys.exit(0)
+    else:
+        sys.exit(1)
 
 EOF
 #
