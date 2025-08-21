@@ -62,7 +62,7 @@ echo "[OK] iptables updated: users=$(ls "$LIMITS_DIR"/*.json 2>/dev/null | wc -l
 EOF
 
 
-###
+
 chmod +x /root/fix-iptables.sh
 
 
