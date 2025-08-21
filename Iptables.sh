@@ -1,77 +1,75 @@
 cat > /root/fix-iptables.sh << 'EOF'
+# /root/fix-iptables.sh
 #!/usr/bin/env bash
 set -euo pipefail
 
-CHAIN_OUT="SSH_USERS_OUT"
-CHAIN_FWD="SSH_USERS_FWD"
-CHAIN_MARK="SSH_MARK"
-LIMITS_DIR="/etc/sshmanager/limits"
-
-if command -v iptables-legacy >/dev/null 2>&1; then IPT="iptables-legacy"; else IPT="iptables"; fi
-if $IPT -w -L >/dev/null 2>&1; then IPT="$IPT -w"; fi
-
-modprobe xt_owner    2>/dev/null || true
-modprobe xt_connmark 2>/dev/null || true
-
-$IPT -t mangle -N "$CHAIN_OUT"  2>/dev/null || true
-$IPT -t mangle -N "$CHAIN_FWD"  2>/dev/null || true
-$IPT -t mangle -N "$CHAIN_MARK" 2>/dev/null || true
-
-$IPT -t mangle -C OUTPUT    -j "$CHAIN_MARK" 2>/dev/null || $IPT -t mangle -I OUTPUT    1 -j "$CHAIN_MARK"
-$IPT -t mangle -C OUTPUT    -j "$CHAIN_OUT"  2>/dev/null || $IPT -t mangle -I OUTPUT    2 -j "$CHAIN_OUT"
-$IPT -t mangle -C FORWARD   -j "$CHAIN_FWD"  2>/dev/null || $IPT -t mangle -I FORWARD   1 -j "$CHAIN_FWD"
-$IPT -t mangle -C PREROUTING -j CONNMARK --restore-mark 2>/dev/null || \
-  $IPT -t mangle -I PREROUTING 1 -j CONNMARK --restore-mark
-
-ensure_rule() {
-  local table="$1" chain="$2" pattern="$3" add_cmd="$4"
-  if ! $IPT -t "$table" -S "$chain" | grep -F -- "$pattern" >/dev/null 2>&1; then
-    eval "$add_cmd"
-  fi
+# ---------- utils ----------
+choose_ipt() {
+  if command -v iptables-legacy >/dev/null 2>&1; then echo iptables-legacy; else echo iptables; fi
 }
+IPTBIN="$(choose_ipt)"
+IPT=("$IPTBIN")
+# add -w if supported
+if "$IPTBIN" -w -L >/dev/null 2>&1; then IPT+=(-w); fi
 
-declare -A WANT
-while IFS=: read -r user _ uid _; do
-  [[ "$uid" =~ ^[0-9]+$ ]] || continue
-  (( uid >= 1000 )) || continue
-  [[ "$user" != "nobody" ]] || continue
-  WANT["$uid"]="$user"
-done < <(getent passwd)
+modprobe xt_connmark >/dev/null 2>&1 || true
+modprobe xt_MARK >/dev/null 2>&1 || true
+modprobe xt_owner >/dev/null 2>&1 || true
+modprobe xt_comment >/dev/null 2>&1 || true
 
-if [[ -d "$LIMITS_DIR" ]]; then
-  for f in "$LIMITS_DIR"/*.json; do
-    [[ -e "$f" ]] || continue
-    u=$(jq -r '.username // empty' "$f" 2>/dev/null || true)
-    if [[ -n "$u" ]]; then
-      uid=$(getent passwd "$u" | cut -d: -f3 || true)
-      [[ "$uid" =~ ^[0-9]+$ && "$uid" -ge 1000 ]] && WANT["$uid"]="$u"
-    fi
+# safe check/append/insert
+rule_exists() { "${IPT[@]}" -t "$1" -C "$2" "${@:3}" >/dev/null 2>&1; }
+ensure_append() { local t="$1" c="$2"; shift 2; rule_exists "$t" "$c" "$@" || "${IPT[@]}" -t "$t" -A "$c" "$@"; }
+ensure_insert_at() { local t="$1" c="$2" idx="$3"; shift 3; rule_exists "$t" "$c" "$@" || "${IPT[@]}" -t "$t" -I "$c" "$idx" "$@"; }
+ensure_jump_at() { local t="$1" from="$2" to="$3" idx="$4"; rule_exists "$t" "$from" -j "$to" || "${IPT[@]}" -t "$t" -I "$from" "$idx" -j "$to"; }
+ensure_new_chain() { "${IPT[@]}" -t mangle -N "$1" 2>/dev/null || true; }
+
+# ---------- chains ----------
+ensure_new_chain SSH_MARK
+ensure_new_chain SSH_USERS_OUT
+ensure_new_chain SSH_USERS_IN
+ensure_new_chain SSH_USERS_FWD
+
+# ---------- global jumps & connmark plumbing ----------
+# PREROUTING: restore mark early for incoming traffic
+ensure_insert_at mangle PREROUTING 1 -j CONNMARK --restore-mark --nfmask 0xffffffff --ctmask 0xffffffff
+
+# OUTPUT: first restore, then mark, then count by owner
+ensure_insert_at mangle OUTPUT 1 -j CONNMARK --restore-mark --nfmask 0xffffffff --ctmask 0xffffffff
+ensure_jump_at   mangle OUTPUT SSH_MARK     1
+ensure_jump_at   mangle OUTPUT SSH_USERS_OUT 2
+
+# INPUT/FORWARD: count by connmark
+ensure_jump_at   mangle INPUT   SSH_USERS_IN   1
+ensure_jump_at   mangle FORWARD SSH_USERS_FWD  1
+
+# ---------- per-user rules ----------
+# users = همه‌ی فایل‌های /etc/sshmanager/limits/*.json
+USERS_DIR="/etc/sshmanager/limits"
+if [[ -d "$USERS_DIR" ]]; then
+  for jf in "$USERS_DIR"/*.json; do
+    [[ -e "$jf" ]] || continue
+    user="$(basename "$jf" .json)"
+    uid="$(id -u "$user" 2>/dev/null || true)"
+    [[ -n "$uid" ]] || continue
+
+    # یک connmark یکتا بر اساس uid (ساده و پایدار)
+    # (اگر خودت mark سفارشی می‌خواهی، اینجا جای آن است.)
+    mark=$(( 0x10000 + uid ))           # مثلاً 0x1xxxx
+    # ---- OUTPUT (owner) ----
+    ensure_append mangle SSH_USERS_OUT -m owner --uid-owner "$uid" -m comment --comment "sshmanager:user=$user;uid=$uid;mode=owner" -j ACCEPT
+
+    # ---- SSH_MARK: روی ترافیک این uid اول MARK بعد SAVE ----
+    ensure_append mangle SSH_MARK -m owner --uid-owner "$uid" -j MARK --set-mark "$mark"
+    ensure_append mangle SSH_MARK -m owner --uid-owner "$uid" -j CONNMARK --save-mark --nfmask 0xffffffff --ctmask 0xffffffff
+
+    # ---- INPUT/FORWARD (connmark) ----
+    ensure_append mangle SSH_USERS_IN  -m connmark --mark "$mark" -m comment --comment "sshmanager:user=$user;uid=$uid;mode=connmark;dir=in"   -j ACCEPT
+    ensure_append mangle SSH_USERS_FWD -m connmark --mark "$mark" -m comment --comment "sshmanager:user=$user;uid=$uid;mode=connmark;dir=fwd"  -j ACCEPT
   done
 fi
 
-for uid in $(printf "%s\n" "${!WANT[@]}" | sort -n); do
-  user="${WANT[$uid]}"
-  mark=$((0x10000 + uid))
-  hex=$(printf "0x%X" "$mark")
-
-  sig1=" -m owner --uid-owner ${uid} -m comment --comment sshmanager:user=${user};uid=${uid};mode=owner "
-  ensure_rule mangle "$CHAIN_OUT" "$sig1" \
-    "$IPT -t mangle -A $CHAIN_OUT -m owner --uid-owner $uid -m comment --comment 'sshmanager:user=${user};uid=${uid};mode=owner' -j ACCEPT"
-
-  sig2=" --uid-owner ${uid} -j MARK --set-mark ${mark}"
-  ensure_rule mangle "$CHAIN_MARK" "$sig2" \
-    "$IPT -t mangle -A $CHAIN_MARK -m owner --uid-owner $uid -j MARK --set-mark $mark"
-
-  sig3=" --uid-owner ${uid} -j CONNMARK --save-mark"
-  ensure_rule mangle "$CHAIN_MARK" "$sig3" \
-    "$IPT -t mangle -A $CHAIN_MARK -m owner --uid-owner $uid -j CONNMARK --save-mark"
-
-  sig4=" -m connmark --mark ${mark} -m comment --comment sshmanager:user=${user};uid=${uid};mode=connmark;mark=${hex} "
-  ensure_rule mangle "$CHAIN_FWD" "$sig4" \
-    "$IPT -t mangle -A $CHAIN_FWD -m connmark --mark $mark -m comment --comment 'sshmanager:user=${user};uid=${uid};mode=connmark;mark=${hex}' -j ACCEPT"
-done
-
-echo "[OK] iptables installed: OUT(owner), FWD(connmark), MARK."
+exit 0
 EOF
 
 
