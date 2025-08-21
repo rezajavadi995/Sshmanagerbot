@@ -20,44 +20,54 @@ for c in "$CHAIN_OUT" "$CHAIN_FWD" "$CHAIN_IN"; do
     $IPT -t mangle -F "$c"
 done
 
-# اتصال chainها به جریان شبکه (وجودی/تکراری نبودن)
+# اتصال chainها به جریان شبکه (اگر قبلاً اضافه نشده باشند)
 $IPT -t mangle -C OUTPUT -j "$CHAIN_OUT" 2>/dev/null || $IPT -t mangle -A OUTPUT  -j "$CHAIN_OUT"
 $IPT -t mangle -C FORWARD -j "$CHAIN_FWD" 2>/dev/null || $IPT -t mangle -A FORWARD -j "$CHAIN_FWD"
 $IPT -t mangle -C INPUT  -j "$CHAIN_IN"  2>/dev/null || $IPT -t mangle -A INPUT   -j "$CHAIN_IN"
 
+# مهم: restore-mark در ابتدای PREROUTING
+$IPT -t mangle -C PREROUTING -j CONNMARK --restore-mark 2>/dev/null || \
+$IPT -t mangle -A PREROUTING -j CONNMARK --restore-mark
+
 # اضافه کردن رول‌ها برای هر یوزر
 shopt -s nullglob
 for f in "$LIMITS_DIR"/*.json; do
-    # نام کاربر از نام فایل (سازگار با ساختار پروژه)
+    # نام کاربر از نام فایل
     user="$(basename "$f" .json)"
-    # گرفتن UID؛ اگر کاربر موجود نیست، رد شو
-    uid="$($IPT -V >/dev/null 2>&1; id -u "$user" 2>/dev/null || true)"
+    uid="$(id -u "$user" 2>/dev/null || true)"
     [[ -n "$uid" ]] || continue
 
-    # تولید mark یکتا بر اساس UID (بدون تغییر منطق)
+    # تولید مارک یکتا
     mark_hex=$(printf "0x%X" $((0x10000 + uid)))
 
-    # --- OUTPUT: مارک‌زدن اتصال + شمارش مالک ---
+    # --- OUTPUT: مارک‌گذاری اتصال ---
     $IPT -t mangle -A "$CHAIN_OUT" -m owner --uid-owner "$uid" \
         -m comment --comment "sshmanager:user=$user;uid=$uid;mode=owner-mark" \
         -j CONNMARK --set-mark "$mark_hex"
 
+    # ذخیره‌ی مارک در کانکشن
+    $IPT -t mangle -A "$CHAIN_OUT" -m owner --uid-owner "$uid" \
+        -m comment --comment "sshmanager:user=$user;uid=$uid;mode=owner-save" \
+        -j CONNMARK --save-mark
+
+    # شمارش مالک
     $IPT -t mangle -A "$CHAIN_OUT" -m owner --uid-owner "$uid" \
         -m comment --comment "sshmanager:user=$user;uid=$uid;mode=owner-count" \
         -j ACCEPT
 
-    # --- FORWARD: شمارش بر مبنای connmark (بدون تغییر منطق) ---
+    # --- FORWARD: شمارش بر اساس connmark ---
     $IPT -t mangle -A "$CHAIN_FWD" -m connmark --mark "$mark_hex" \
         -m comment --comment "sshmanager:user=$user;uid=$uid;mode=connmark-fwd;mark=$mark_hex" \
         -j ACCEPT
 
-    # --- INPUT: شمارش بر مبنای connmark برای ترافیک ورودی همان اتصال ---
+    # --- INPUT: شمارش بر اساس connmark ---
     $IPT -t mangle -A "$CHAIN_IN" -m connmark --mark "$mark_hex" \
         -m comment --comment "sshmanager:user=$user;uid=$uid;mode=connmark-in;mark=$mark_hex" \
         -j ACCEPT
 done
 
 echo "[OK] iptables updated: users=$(ls "$LIMITS_DIR"/*.json 2>/dev/null | wc -l)"
+
 
 EOF
 
