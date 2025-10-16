@@ -6,8 +6,8 @@ import os, json, requests
 from datetime import datetime
 
 LIMITS_DIR = "/etc/sshmanager/limits"
-BOT_TOKEN = "8152962391:AAG4kYisE21KI8dAbzFy9oq-rn9h9RCQyBM"
-ADMIN_ID = "8062924341"
+BOT_TOKEN = "your token"
+ADMIN_ID = "your id"
 
 def safe_int(v, default=0):
     try:
